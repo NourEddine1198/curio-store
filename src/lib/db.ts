@@ -1,16 +1,10 @@
 import { PrismaClient } from "@/generated/prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-
-// What this does:
-// Creates ONE database connection that the whole app shares.
-// Prisma v7 uses a "driver adapter" to talk to Postgres directly.
-// In development, Next.js reloads code often — this singleton pattern
-// prevents creating a new connection on every reload.
+import { PrismaNeonHttp } from "@prisma/adapter-neon";
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 function createClient() {
-  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+  const adapter = new PrismaNeonHttp(process.env.DATABASE_URL!, { arrayMode: false, fullResults: true });
   return new PrismaClient({ adapter });
 }
 
