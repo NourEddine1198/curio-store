@@ -122,43 +122,40 @@ export async function POST(request: Request) {
 
     const total = subtotal + deliveryPrice;
 
-    // --- Create order + items in one transaction ---
-    const order = await db.$transaction(async (tx) => {
-      // Create the order
-      const newOrder = await tx.order.create({
-        data: {
-          customerName: customerName.trim(),
-          customerPhone: customerPhone.trim(),
-          customerPhone2: customerPhone2?.trim() || null,
-          wilayaCode,
-          wilayaName: wilaya.name,
-          deliveryType,
-          address: deliveryType === "HOME" ? address.trim() : null,
-          officeName: deliveryType === "OFFICE" ? officeName : null,
-          officeCommune: deliveryType === "OFFICE" ? officeCommune : null,
-          deliveryPrice,
-          subtotal,
-          total,
-          notes: couponCode
-            ? `كود التخفيض: ${couponCode}${notes ? " | " + notes : ""}`
-            : notes || null,
-          items: {
-            create: orderItems,
-          },
+    // --- Create order + update stock ---
+    // Note: Neon HTTP adapter doesn't support interactive transactions,
+    // so we run these sequentially. Fine for COD with manual confirmation.
+    const order = await db.order.create({
+      data: {
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        customerPhone2: customerPhone2?.trim() || null,
+        wilayaCode,
+        wilayaName: wilaya.name,
+        deliveryType,
+        address: deliveryType === "HOME" ? address.trim() : null,
+        officeName: deliveryType === "OFFICE" ? officeName : null,
+        officeCommune: deliveryType === "OFFICE" ? officeCommune : null,
+        deliveryPrice,
+        subtotal,
+        total,
+        notes: couponCode
+          ? `كود التخفيض: ${couponCode}${notes ? " | " + notes : ""}`
+          : notes || null,
+        items: {
+          create: orderItems,
         },
-        include: { items: true },
-      });
-
-      // Decrease stock for each product
-      for (const item of orderItems) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.quantity } },
-        });
-      }
-
-      return newOrder;
+      },
+      include: { items: true },
     });
+
+    // Decrease stock for each product
+    for (const item of orderItems) {
+      await db.product.update({
+        where: { id: item.productId },
+        data: { stock: { decrement: item.quantity } },
+      });
+    }
 
     // --- Return success ---
     return NextResponse.json(
