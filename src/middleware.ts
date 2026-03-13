@@ -13,8 +13,8 @@ function getCorsHeaders(origin: string | null) {
   const isAllowed = origin && ALLOWED_ORIGINS.includes(origin);
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
     "Access-Control-Max-Age": "86400",
   };
 }

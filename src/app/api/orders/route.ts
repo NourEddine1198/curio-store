@@ -1,12 +1,88 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
 // ─── Validation helpers ──────────────────────────────────
 
 const PHONE_RE = /^0[567]\d{8}$/; // Algerian mobile: 05/06/07 + 8 digits
 
+// Simple admin password — checked via X-Admin-Key header
+const ADMIN_KEY = process.env.ADMIN_KEY || "curio-admin-2026";
+
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+function unauthorized() {
+  return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
+}
+
+// ─── GET /api/orders — List all orders (admin) ───────────
+
+export async function GET(request: NextRequest) {
+  // Check admin key
+  const key = request.headers.get("x-admin-key");
+  if (key !== ADMIN_KEY) {
+    return unauthorized();
+  }
+
+  try {
+    const url = new URL(request.url);
+    const status = url.searchParams.get("status"); // filter by status
+    const search = url.searchParams.get("search"); // search by name or phone
+    const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") || "50", 10)));
+    const skip = (page - 1) * limit;
+
+    // Build where clause
+    const where: Record<string, unknown> = {};
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (search) {
+      where.OR = [
+        { customerName: { contains: search, mode: "insensitive" } },
+        { customerPhone: { contains: search } },
+      ];
+    }
+
+    // Get orders + total count
+    const [orders, total] = await Promise.all([
+      db.order.findMany({
+        where,
+        include: {
+          items: {
+            include: {
+              product: {
+                select: { name: true, slug: true, nameEn: true },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      db.order.count({ where }),
+    ]);
+
+    return NextResponse.json({
+      orders,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/orders error:", error);
+    return NextResponse.json(
+      { error: "صار مشكل في تحميل الطلبات" },
+      { status: 500 }
+    );
+  }
 }
 
 // ─── POST /api/orders — Create a new order ───────────────
