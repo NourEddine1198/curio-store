@@ -122,9 +122,9 @@ export async function POST(request: Request) {
 
     const total = subtotal + deliveryPrice;
 
-    // --- Create order + update stock ---
-    // Note: Neon HTTP adapter doesn't support interactive transactions,
-    // so we run these sequentially. Fine for COD with manual confirmation.
+    // --- Create order, then items, then update stock ---
+    // Neon HTTP adapter doesn't support transactions (even implicit nested creates).
+    // We do each step separately. Fine for COD with manual confirmation.
     const order = await db.order.create({
       data: {
         customerName: customerName.trim(),
@@ -142,12 +142,20 @@ export async function POST(request: Request) {
         notes: couponCode
           ? `كود التخفيض: ${couponCode}${notes ? " | " + notes : ""}`
           : notes || null,
-        items: {
-          create: orderItems,
-        },
       },
-      include: { items: true },
     });
+
+    // Create order items one by one
+    for (const item of orderItems) {
+      await db.orderItem.create({
+        data: {
+          orderId: order.id,
+          productId: item.productId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        },
+      });
+    }
 
     // Decrease stock for each product
     for (const item of orderItems) {
