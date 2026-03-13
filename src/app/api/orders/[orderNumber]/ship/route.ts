@@ -89,8 +89,9 @@ export async function POST(
     });
   } catch (error) {
     console.error("POST /api/orders/[orderNumber]/ship error:", error);
+    const debugMsg = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "صار مشكل في شحن الطلب" },
+      { error: "صار مشكل في شحن الطلب", debug: debugMsg },
       { status: 500 }
     );
   }

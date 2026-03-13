@@ -157,8 +157,9 @@ export async function PATCH(
     return NextResponse.json({ success: true, order: updated });
   } catch (error) {
     console.error("PATCH /api/orders/[orderNumber] error:", error);
+    const debugMsg = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "صار مشكل في تحديث الطلب" },
+      { error: "صار مشكل في تحديث الطلب", debug: debugMsg },
       { status: 500 }
     );
   }
