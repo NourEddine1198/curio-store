@@ -177,9 +177,8 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     console.error("POST /api/orders error:", error);
-    const detail = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "صار مشكل في تسجيل الطلب. حاول مرة أخرى.", debug: detail },
+      { error: "صار مشكل في تسجيل الطلب. حاول مرة أخرى." },
       { status: 500 }
     );
   }
