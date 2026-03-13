@@ -142,9 +142,16 @@ export async function PATCH(
     if (notes !== undefined) updateData.notes = notes;
     if (trackingCode !== undefined) updateData.trackingCode = trackingCode;
 
-    const updated = await db.order.update({
+    // Neon HTTP adapter doesn't support transactions.
+    // update() + include = implicit transaction → fails.
+    // Split into: update (no include) then findUnique (with include).
+    await db.order.update({
       where: { orderNumber: num },
       data: updateData,
+    });
+
+    const updated = await db.order.findUnique({
+      where: { orderNumber: num },
       include: {
         items: {
           include: {

@@ -70,9 +70,16 @@ export async function POST(
     // Store the full Ecotrack response for debugging
     updateData.webhookPayload = result.rawResponse;
 
-    const updated = await db.order.update({
+    // Neon HTTP adapter doesn't support transactions.
+    // update() + include = implicit transaction → fails.
+    // Split into: update (no include) then findUnique (with include).
+    await db.order.update({
       where: { orderNumber: num },
       data: updateData,
+    });
+
+    const updated = await db.order.findUnique({
+      where: { orderNumber: num },
       include: {
         items: {
           include: {
