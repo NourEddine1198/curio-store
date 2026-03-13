@@ -14,7 +14,7 @@ function getCorsHeaders(origin: string | null) {
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
     "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
+    "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key, X-Webhook-Secret",
     "Access-Control-Max-Age": "86400",
   };
 }

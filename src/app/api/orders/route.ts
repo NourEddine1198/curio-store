@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { sendToOrderDZ } from "@/lib/orderdz";
 
 // ─── Validation helpers ──────────────────────────────────
 
@@ -239,6 +240,46 @@ export async function POST(request: Request) {
         where: { id: item.productId },
         data: { stock: { decrement: item.quantity } },
       });
+    }
+
+    // --- Auto-send to OrderDZ for confirmation ---
+    // This runs in the background — if it fails, the order is still saved.
+    // The customer never sees an error from this.
+    try {
+      const confirmationItems = orderItems.map((item) => {
+        const product = productById.get(item.productId);
+        return {
+          productName: product?.name || "Unknown",
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        };
+      });
+
+      const orderdzResult = await sendToOrderDZ({
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        customerPhone2: order.customerPhone2,
+        wilayaName: order.wilayaName,
+        wilayaCode: order.wilayaCode,
+        deliveryType: order.deliveryType,
+        address: order.address,
+        officeName: order.officeName,
+        officeCommune: order.officeCommune,
+        total: order.total,
+        items: confirmationItems,
+      });
+
+      // Save their external ID if they gave us one
+      if (orderdzResult.externalId) {
+        await db.order.update({
+          where: { id: order.id },
+          data: { externalId: orderdzResult.externalId },
+        });
+      }
+    } catch (err) {
+      // Never block the customer — just log it
+      console.error("[OrderDZ] Auto-send failed (order saved anyway):", err);
     }
 
     // --- Return success ---
