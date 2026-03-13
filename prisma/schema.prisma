@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Products ───────────────────────────────────────────────
+model Product {
+  id          String      @id @default(cuid())
+  slug        String      @unique           // "goul-bla-matgoul", "roubla"
+  name        String                        // Arabic display name
+  nameEn      String?                       // English name (for admin)
+  description String?     @db.Text
+  price       Int                           // Price in DA (centimes-free)
+  compareAt   Int?                          // Strike-through price for bundles
+  images      String[]                      // Array of image URLs
+  stock       Int         @default(0)
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  orderItems  OrderItem[]
+}
+
+// ─── Orders ─────────────────────────────────────────────────
+model Order {
+  id              String      @id @default(cuid())
+  orderNumber     Int         @unique @default(autoincrement())
+  status          OrderStatus @default(PENDING)
+
+  // Customer info
+  customerName    String
+  customerPhone   String
+  customerPhone2  String?                   // Backup phone
+
+  // Delivery info
+  wilayaCode      String                    // "16" for Algiers
+  wilayaName      String                    // "الجزائر"
+  deliveryType    DeliveryType              // HOME or OFFICE
+  address         String?     @db.Text      // Home address (if HOME)
+  officeName      String?                   // Stop-desk office name (if OFFICE)
+  officeCommune   String?                   // Office commune
+  deliveryPrice   Int         @default(0)   // Delivery cost in DA
+
+  // Money
+  subtotal        Int                       // Products total in DA
+  total           Int                       // subtotal + deliveryPrice
+
+  // Fulfillment
+  confirmedAt     DateTime?                 // When confirmation agent confirmed
+  confirmedBy     String?                   // Agent name/ID
+  shippedAt       DateTime?
+  trackingCode    String?                   // Shipping company tracking
+  deliveredAt     DateTime?
+  returnedAt      DateTime?
+  returnReason    String?
+
+  // Webhook / external
+  externalId      String?                   // ID from confirmation company
+  webhookPayload  Json?                     // Raw webhook data for debugging
+
+  notes           String?     @db.Text      // Internal notes
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  items           OrderItem[]
+
+  @@index([status])
+  @@index([customerPhone])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  productId String
+  quantity  Int     @default(1)
+  unitPrice Int                             // Price at time of order (in DA)
+
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+}
+
+// ─── Wilayas (delivery zones) ───────────────────────────────
+model Wilaya {
+  code       String  @id                    // "01", "02", ... "58"
+  name       String                         // Arabic name
+  homePrice  Int                            // Home delivery price in DA
+  officePrice Int                           // Office/stop-desk price in DA
+  offices    Json?                          // Array of { commune, phone } objects
+  active     Boolean @default(true)
+}
+
+// ─── Enums ──────────────────────────────────────────────────
+enum OrderStatus {
+  PENDING          // Just placed
+  CONFIRMED        // Confirmation agent said yes
+  CANCELLED        // Customer cancelled or unreachable
+  PROCESSING       // Being packed
+  SHIPPED          // Handed to delivery company
+  DELIVERED        // Customer received
+  RETURNED         // Came back
+}
+
+enum DeliveryType {
+  HOME
+  OFFICE
+}

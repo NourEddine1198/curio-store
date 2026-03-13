@@ -1,0 +1,11 @@
+# ─── Curio Store — Netlify Config ─────────────────────────────
+# What this does:
+# Tells Netlify how to build and serve your Next.js store.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Next.js plugin — handles server-side rendering, API routes, etc.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
