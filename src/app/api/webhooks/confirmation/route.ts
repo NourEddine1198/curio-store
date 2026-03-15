@@ -119,8 +119,21 @@ export async function POST(request: NextRequest) {
       updateData.confirmedAt = new Date();
     }
 
-    // If cancelling, restore stock so those games can be sold again
-    if (newStatus === "CANCELLED" && order.status !== "CANCELLED") {
+    // CONFIRMED → decrement stock (stock is no longer decremented on order creation)
+    if (newStatus === "CONFIRMED" && order.status !== "CONFIRMED") {
+      const items = await db.orderItem.findMany({
+        where: { orderId: order.id },
+      });
+      for (const item of items) {
+        await db.product.update({
+          where: { id: item.productId },
+          data: { stock: { decrement: item.quantity } },
+        });
+      }
+    }
+
+    // CANCELLED → restore stock (only if previously confirmed)
+    if (newStatus === "CANCELLED" && order.status === "CONFIRMED") {
       const items = await db.orderItem.findMany({
         where: { orderId: order.id },
       });

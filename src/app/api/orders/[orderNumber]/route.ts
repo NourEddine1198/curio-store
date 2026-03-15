@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-// Simple admin password — checked via X-Admin-Key header
-const ADMIN_KEY = process.env.ADMIN_KEY || "curio-admin-2026";
+// Admin key — MUST be set in environment. No default = no access.
+const ADMIN_KEY = process.env.ADMIN_KEY;
 
 // Valid status transitions
 const VALID_STATUSES = [
@@ -15,10 +15,13 @@ const VALID_STATUSES = [
   "RETURNED",
 ];
 
-// ─── GET /api/orders/[orderNumber] — Order details (public) ───
+// ─── GET /api/orders/[orderNumber] — Order summary ───────
+// PUBLIC but SAFE: only returns order number, status, and total.
+// No personal data (name, phone, address) is exposed.
+// Admin gets full details via the admin GET /api/orders endpoint.
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ orderNumber: string }> }
 ) {
   try {
@@ -29,23 +32,37 @@ export async function GET(
       return NextResponse.json({ error: "رقم الطلب غير صحيح" }, { status: 400 });
     }
 
+    // Check if this is an admin request (full details) or public (safe summary)
+    const key = request.headers.get("x-admin-key");
+    const isAdmin = ADMIN_KEY && key === ADMIN_KEY;
+
     const order = await db.order.findUnique({
       where: { orderNumber: num },
       select: {
         orderNumber: true,
         status: true,
-        customerName: true,
-        customerPhone: true,
-        wilayaName: true,
-        wilayaCode: true,
-        deliveryType: true,
-        deliveryPrice: true,
-        address: true,
-        officeName: true,
-        officeCommune: true,
-        subtotal: true,
         total: true,
         createdAt: true,
+        // Only include personal data for admin requests
+        ...(isAdmin && {
+          customerName: true,
+          customerPhone: true,
+          customerPhone2: true,
+          wilayaName: true,
+          wilayaCode: true,
+          deliveryType: true,
+          deliveryPrice: true,
+          address: true,
+          officeName: true,
+          officeCommune: true,
+          subtotal: true,
+          notes: true,
+          confirmedAt: true,
+          confirmedBy: true,
+          shippedAt: true,
+          trackingCode: true,
+          ip: true,
+        }),
         items: {
           select: {
             quantity: true,
@@ -78,7 +95,12 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ orderNumber: string }> }
 ) {
-  // Check admin key
+  // Admin key MUST be set in env — no default, no fallback
+  if (!ADMIN_KEY) {
+    console.error("ADMIN_KEY env var not set — admin access disabled");
+    return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
+  }
+
   const key = request.headers.get("x-admin-key");
   if (key !== ADMIN_KEY) {
     return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
@@ -125,8 +147,21 @@ export async function PATCH(
         updateData.returnedAt = new Date();
       }
 
-      // If cancelling, restore stock
-      if (status === "CANCELLED" && existing.status !== "CANCELLED") {
+      // CONFIRMED → decrement stock (stock is only decremented here, not on order creation)
+      if (status === "CONFIRMED" && existing.status !== "CONFIRMED") {
+        const items = await db.orderItem.findMany({
+          where: { orderId: existing.id },
+        });
+        for (const item of items) {
+          await db.product.update({
+            where: { id: item.productId },
+            data: { stock: { decrement: item.quantity } },
+          });
+        }
+      }
+
+      // CANCELLED → restore stock (only if it was previously confirmed)
+      if (status === "CANCELLED" && existing.status === "CONFIRMED") {
         const items = await db.orderItem.findMany({
           where: { orderId: existing.id },
         });

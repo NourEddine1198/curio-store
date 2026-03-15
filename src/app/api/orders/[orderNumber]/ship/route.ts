@@ -2,14 +2,19 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createParcel } from "@/lib/ecotrack";
 
-const ADMIN_KEY = process.env.ADMIN_KEY || "curio-admin-2026";
+// Admin key — MUST be set in environment. No default = no access.
+const ADMIN_KEY = process.env.ADMIN_KEY;
 
 // POST /api/orders/[orderNumber]/ship — Send order to Ecotrack
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ orderNumber: string }> }
 ) {
-  // Admin auth
+  // Admin auth — key must be set in env, no fallback
+  if (!ADMIN_KEY) {
+    console.error("ADMIN_KEY env var not set — admin access disabled");
+    return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
+  }
   const key = request.headers.get("x-admin-key");
   if (key !== ADMIN_KEY) {
     return NextResponse.json({ error: "غير مصرح" }, { status: 401 });

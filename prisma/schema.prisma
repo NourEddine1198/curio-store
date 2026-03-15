@@ -62,6 +62,9 @@ model Order {
   externalId      String?                   // ID from confirmation company
   webhookPayload  Json?                     // Raw webhook data for debugging
 
+  // Security / anti-abuse
+  ip              String?                   // Client IP for rate limiting
+
   notes           String?     @db.Text      // Internal notes
 
   createdAt       DateTime    @default(now())
@@ -72,6 +75,7 @@ model Order {
   @@index([status])
   @@index([customerPhone])
   @@index([createdAt])
+  @@index([ip])
 }
 
 model OrderItem {

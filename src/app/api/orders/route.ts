@@ -6,8 +6,16 @@ import { sendToOrderDZ } from "@/lib/orderdz";
 
 const PHONE_RE = /^0[567]\d{8}$/; // Algerian mobile: 05/06/07 + 8 digits
 
-// Simple admin password — checked via X-Admin-Key header
-const ADMIN_KEY = process.env.ADMIN_KEY || "curio-admin-2026";
+// Admin key — MUST be set in environment. No default = no access.
+const ADMIN_KEY = process.env.ADMIN_KEY;
+
+// ─── Security config ─────────────────────────────────────
+
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;  // 10 minutes
+const RATE_LIMIT_MAX_ORDERS = 5;               // max 5 orders per IP per window
+const PHONE_COOLDOWN_MS = 60 * 60 * 1000;      // 1 hour
+const PHONE_MAX_ORDERS = 3;                     // max 3 orders per phone per hour
+const MIN_SUBMIT_TIME_MS = 3000;                // form must take at least 3 seconds
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -17,10 +25,31 @@ function unauthorized() {
   return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
 }
 
+function tooMany(message: string) {
+  return NextResponse.json({ error: message }, { status: 429 });
+}
+
+/**
+ * Get the real client IP from Netlify/proxy headers
+ */
+function getClientIp(request: NextRequest): string {
+  return (
+    request.headers.get("x-nf-client-connection-ip") ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown"
+  );
+}
+
 // ─── GET /api/orders — List all orders (admin) ───────────
 
 export async function GET(request: NextRequest) {
-  // Check admin key
+  // Admin key MUST be set in env — no default, no fallback
+  if (!ADMIN_KEY) {
+    console.error("ADMIN_KEY env var not set — admin access disabled");
+    return unauthorized();
+  }
+
   const key = request.headers.get("x-admin-key");
   if (key !== ADMIN_KEY) {
     return unauthorized();
@@ -88,9 +117,62 @@ export async function GET(request: NextRequest) {
 
 // ─── POST /api/orders — Create a new order ───────────────
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const clientIp = getClientIp(request);
+
+    // ─── SECURITY CHECK 1: Honeypot ─────────────────────
+    // Frontend has a hidden field called "website". Humans never see it.
+    // Bots auto-fill it. If it has a value → silent reject (looks like success to the bot).
+    if (body.website) {
+      // Return fake success so bots think it worked
+      return NextResponse.json(
+        {
+          success: true,
+          orderNumber: Math.floor(Math.random() * 90000) + 10000,
+          total: 0,
+          message: "تم تسجيل طلبك بنجاح. راح نتصلو بيك قريبا للتأكيد.",
+        },
+        { status: 201 }
+      );
+    }
+
+    // ─── SECURITY CHECK 2: Speed trap ───────────────────
+    // Frontend sends a timestamp of when the page loaded.
+    // If the form was submitted in < 3 seconds, it's almost certainly a bot.
+    const formLoadedAt = Number(body._t);
+    if (formLoadedAt) {
+      const elapsed = Date.now() - formLoadedAt;
+      if (elapsed < MIN_SUBMIT_TIME_MS) {
+        // Too fast — silent fake success
+        return NextResponse.json(
+          {
+            success: true,
+            orderNumber: Math.floor(Math.random() * 90000) + 10000,
+            total: 0,
+            message: "تم تسجيل طلبك بنجاح. راح نتصلو بيك قريبا للتأكيد.",
+          },
+          { status: 201 }
+        );
+      }
+    }
+
+    // ─── SECURITY CHECK 3: IP rate limiting ─────────────
+    // Max 5 orders per IP in the last 10 minutes.
+    if (clientIp !== "unknown") {
+      const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_MS);
+      const recentOrdersByIp = await db.order.count({
+        where: {
+          ip: clientIp,
+          createdAt: { gte: windowStart },
+        },
+      });
+
+      if (recentOrdersByIp >= RATE_LIMIT_MAX_ORDERS) {
+        return tooMany("بزاف ديال الطلبات! جرب بعد شويا.");
+      }
+    }
 
     // --- Extract fields ---
     const {
@@ -120,6 +202,20 @@ export async function POST(request: Request) {
       return badRequest("رقم الهاتف الثاني غير صحيح");
     }
 
+    // ─── SECURITY CHECK 4: Phone number cooldown ────────
+    // Max 3 orders per phone number per hour.
+    const phoneCooldownStart = new Date(Date.now() - PHONE_COOLDOWN_MS);
+    const recentOrdersByPhone = await db.order.count({
+      where: {
+        customerPhone: customerPhone,
+        createdAt: { gte: phoneCooldownStart },
+      },
+    });
+
+    if (recentOrdersByPhone >= PHONE_MAX_ORDERS) {
+      return tooMany("عندك طلبات كثيرة. جرب بعد ساعة.");
+    }
+
     if (!wilayaCode || typeof wilayaCode !== "string") {
       return badRequest("لازم تختار الولاية");
     }
@@ -140,6 +236,11 @@ export async function POST(request: Request) {
       return badRequest("لازم تختار منتج واحد على الأقل");
     }
 
+    // Cap items array to prevent abuse (nobody orders 50 different products)
+    if (items.length > 10) {
+      return badRequest("الطلب فيه بزاف ديال المنتجات");
+    }
+
     // --- Look up wilaya from database ---
     const wilaya = await db.wilaya.findUnique({ where: { code: wilayaCode } });
 
@@ -154,8 +255,7 @@ export async function POST(request: Request) {
       return badRequest("التوصيل غير متوفر لهذه الولاية حاليا");
     }
 
-    // --- Look up products and calculate subtotal ---
-    // Accept either slugs or IDs (slugs preferred from frontend)
+    // --- Look up products and check stock (READ-ONLY — no decrement) ---
     const hasSlugs = items[0]?.slug;
     const products = hasSlugs
       ? await db.product.findMany({
@@ -184,6 +284,9 @@ export async function POST(request: Request) {
 
       const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
 
+      // Check stock but DON'T decrement it.
+      // Stock is only decremented when order is CONFIRMED.
+      // This prevents fake orders from draining inventory.
       if (qty > product.stock) {
         return badRequest(`${product.name} — الكمية المطلوبة غير متوفرة (باقي ${product.stock})`);
       }
@@ -199,9 +302,7 @@ export async function POST(request: Request) {
 
     const total = subtotal + deliveryPrice;
 
-    // --- Create order, then items, then update stock ---
-    // Neon HTTP adapter doesn't support transactions (even implicit nested creates).
-    // We do each step separately. Fine for COD with manual confirmation.
+    // --- Create order (NO stock decrement — that happens on confirmation) ---
     const order = await db.order.create({
       data: {
         customerName: customerName.trim(),
@@ -216,6 +317,7 @@ export async function POST(request: Request) {
         deliveryPrice,
         subtotal,
         total,
+        ip: clientIp !== "unknown" ? clientIp : null,
         notes: couponCode
           ? `كود التخفيض: ${couponCode}${notes ? " | " + notes : ""}`
           : notes || null,
@@ -234,17 +336,11 @@ export async function POST(request: Request) {
       });
     }
 
-    // Decrease stock for each product
-    for (const item of orderItems) {
-      await db.product.update({
-        where: { id: item.productId },
-        data: { stock: { decrement: item.quantity } },
-      });
-    }
+    // NOTE: Stock is NOT decremented here anymore.
+    // Stock decreases only when order status → CONFIRMED (via webhook or admin).
+    // This prevents fake/bot orders from draining inventory.
 
     // --- Auto-send to OrderDZ for confirmation ---
-    // This runs in the background — if it fails, the order is still saved.
-    // The customer never sees an error from this.
     try {
       const confirmationItems = orderItems.map((item) => {
         const product = productById.get(item.productId);
@@ -270,7 +366,6 @@ export async function POST(request: Request) {
         items: confirmationItems,
       });
 
-      // Save their external ID if they gave us one
       if (orderdzResult.externalId) {
         await db.order.update({
           where: { id: order.id },
@@ -278,7 +373,6 @@ export async function POST(request: Request) {
         });
       }
     } catch (err) {
-      // Never block the customer — just log it
       console.error("[OrderDZ] Auto-send failed (order saved anyway):", err);
     }
 
