@@ -3,13 +3,25 @@
  *
  * WHAT THIS DOES: When a customer places an order on curiodz.com, this
  * automatically sends the order to OrderDZ so they can call the customer
- * and confirm it. Like auto-forwarding an email to your receptionist.
+ * and confirm it (COD confirmation). Like auto-forwarding an order to
+ * your call center receptionist.
  *
- * STATUS: Skeleton ready — update field names when OrderDZ sends their API docs.
+ * API: https://orderdz.com/api/v1/orders/create
+ * Auth: Bearer token
  */
 
-const ORDERDZ_API_URL = process.env.ORDERDZ_API_URL || "";
+const ORDERDZ_BASE_URL =
+  process.env.ORDERDZ_API_URL || "https://orderdz.com/api/v1";
 const ORDERDZ_API_KEY = process.env.ORDERDZ_API_KEY || "";
+
+// ─── SKU Mapping ─────────────────────────────────────────────
+// Maps our product slugs to OrderDZ's internal SKU codes.
+// If we add a new product, add its SKU here too.
+const SKU_MAP: Record<string, string> = {
+  "goul-bla-matgoul": "PRDV2E6L",
+  roubla: "PRD92FSO",
+  "eid-bundle-2026": "PRDNAG5A",
+};
 
 interface OrderForConfirmation {
   orderNumber: number;
@@ -22,9 +34,12 @@ interface OrderForConfirmation {
   address: string | null;
   officeName: string | null;
   officeCommune: string | null;
+  deliveryPrice: number;
   total: number;
+  notes: string | null;
   items: {
     productName: string;
+    slug: string;
     quantity: number;
     unitPrice: number;
   }[];
@@ -45,36 +60,39 @@ interface OrderDZResult {
 export async function sendToOrderDZ(
   order: OrderForConfirmation
 ): Promise<OrderDZResult> {
-  // If not configured yet, skip silently (expected until we get API details)
-  if (!ORDERDZ_API_URL || !ORDERDZ_API_KEY) {
-    console.log("[OrderDZ] Skipping — API not configured yet");
+  // If not configured, skip silently
+  if (!ORDERDZ_API_KEY) {
+    console.log("[OrderDZ] Skipping — API key not configured");
     return { success: false, externalId: null, error: "not_configured" };
   }
 
   try {
-    // ──────────────────────────────────────────────────────────────
-    // ADJUST THIS when OrderDZ sends their API docs.
-    // The field names below are best guesses. Change to match their spec.
-    // ──────────────────────────────────────────────────────────────
     const payload = {
-      reference: String(order.orderNumber),
+      order_id: String(order.orderNumber),
       customer_name: order.customerName,
       customer_phone: order.customerPhone,
-      customer_phone2: order.customerPhone2,
-      wilaya: order.wilayaName,
-      wilaya_code: order.wilayaCode,
-      delivery_type: order.deliveryType.toLowerCase(),
-      address: order.address || order.officeName || "",
-      commune: order.officeCommune || "",
-      total_price: order.total,
-      products: order.items.map((item) => ({
-        name: item.productName,
-        quantity: item.quantity,
+      customer_phone2: order.customerPhone2 || "",
+      state_id: parseInt(order.wilayaCode, 10),
+      state_name: order.wilayaName,
+      city_name: order.officeCommune || "",
+      customer_address:
+        order.address || order.officeName || "",
+      stop_desk: order.deliveryType === "OFFICE" ? 1 : 0,
+      shipping_price: order.deliveryPrice,
+      total: order.total,
+      notes: order.notes || "",
+      items: order.items.map((item) => ({
         price: item.unitPrice,
+        quantity: item.quantity,
+        sku: SKU_MAP[item.slug] || "",
+        variants: "",
+        offer: "",
       })),
     };
 
-    const response = await fetch(ORDERDZ_API_URL, {
+    const url = `${ORDERDZ_BASE_URL}/orders/create`;
+
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -95,14 +113,18 @@ export async function sendToOrderDZ(
 
     const data = await response.json();
 
-    // ADJUST: Their response field for the order ID may differ
+    // Extract OrderDZ's ID from their response (try common field names)
     const externalId =
-      data.id || data.order_id || data.external_id || null;
+      data.id ||
+      data.order_id ||
+      data.data?.id ||
+      data.data?.order_id ||
+      null;
 
     console.log(
-      `[OrderDZ] Order #${order.orderNumber} sent. External ID: ${externalId}`
+      `[OrderDZ] Order #${order.orderNumber} sent successfully. External ID: ${externalId}`
     );
-    return { success: true, externalId };
+    return { success: true, externalId: String(externalId) };
   } catch (error) {
     console.error("[OrderDZ] Failed to send order:", error);
     return { success: false, externalId: null, error: "network_error" };

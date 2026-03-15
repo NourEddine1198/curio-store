@@ -17,6 +17,44 @@ const PHONE_COOLDOWN_MS = 60 * 60 * 1000;      // 1 hour
 const PHONE_MAX_ORDERS = 3;                     // max 3 orders per phone per hour
 const MIN_SUBMIT_TIME_MS = 3000;                // form must take at least 3 seconds
 
+// ─── Coupon config ──────────────────────────────────────
+
+interface CouponDef {
+  discountAmount: number;
+  applicableSlugs: string[];
+  expiresAt: Date | null;
+}
+
+const ACTIVE_COUPONS: Record<string, CouponDef> = {
+  INSTAGRAM: {
+    discountAmount: 900,                  // 3900 → 3000 on the pack
+    applicableSlugs: ["eid-2026-bundle"],
+    expiresAt: process.env.COUPON_INSTAGRAM_EXPIRES
+      ? new Date(process.env.COUPON_INSTAGRAM_EXPIRES)
+      : null,                             // null = no expiry (set env var to enable)
+  },
+};
+
+function validateCoupon(
+  code: string,
+  productSlugs: string[]
+): { valid: true; discount: number } | { valid: false; error: string } {
+  const coupon = ACTIVE_COUPONS[code];
+  if (!coupon) {
+    return { valid: false, error: "كود التخفيض غير صالح" };
+  }
+  if (coupon.expiresAt && new Date() > coupon.expiresAt) {
+    return { valid: false, error: "كود التخفيض منتهي الصلاحية" };
+  }
+  const hasApplicable = productSlugs.some((s) =>
+    coupon.applicableSlugs.includes(s)
+  );
+  if (!hasApplicable) {
+    return { valid: false, error: "هذا الكود يخدم غير مع الباك" };
+  }
+  return { valid: true, discount: coupon.discountAmount };
+}
+
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
@@ -300,7 +338,30 @@ export async function POST(request: NextRequest) {
       subtotal += product.price * qty;
     }
 
-    const total = subtotal + deliveryPrice;
+    // --- Coupon validation ---
+    let discountAmount = 0;
+    if (couponCode && typeof couponCode === "string") {
+      const cartSlugs = products.map((p) => p.slug);
+      const couponResult = validateCoupon(
+        couponCode.trim().toUpperCase(),
+        cartSlugs
+      );
+      if (!couponResult.valid) {
+        return badRequest(couponResult.error);
+      }
+      discountAmount = couponResult.discount;
+    }
+
+    const total = subtotal - discountAmount + deliveryPrice;
+
+    // Build notes with coupon info
+    let orderNotes = notes || null;
+    if (couponCode) {
+      const couponInfo = discountAmount > 0
+        ? `كود التخفيض: ${couponCode} (-${discountAmount} دج)`
+        : `كود التخفيض: ${couponCode}`;
+      orderNotes = couponInfo + (notes ? " | " + notes : "");
+    }
 
     // --- Create order (NO stock decrement — that happens on confirmation) ---
     const order = await db.order.create({
@@ -318,9 +379,7 @@ export async function POST(request: NextRequest) {
         subtotal,
         total,
         ip: clientIp !== "unknown" ? clientIp : null,
-        notes: couponCode
-          ? `كود التخفيض: ${couponCode}${notes ? " | " + notes : ""}`
-          : notes || null,
+        notes: orderNotes,
       },
     });
 
@@ -346,6 +405,7 @@ export async function POST(request: NextRequest) {
         const product = productById.get(item.productId);
         return {
           productName: product?.name || "Unknown",
+          slug: product?.slug || "",
           quantity: item.quantity,
           unitPrice: item.unitPrice,
         };
@@ -362,7 +422,9 @@ export async function POST(request: NextRequest) {
         address: order.address,
         officeName: order.officeName,
         officeCommune: order.officeCommune,
+        deliveryPrice: order.deliveryPrice,
         total: order.total,
+        notes: order.notes,
         items: confirmationItems,
       });
 
