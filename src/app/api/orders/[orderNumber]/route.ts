@@ -43,15 +43,16 @@ export async function GET(
         status: true,
         total: true,
         createdAt: true,
-        // Only include personal data for admin requests
+        // Public display fields (needed for thank-you page)
+        customerName: true,
+        wilayaName: true,
+        wilayaCode: true,
+        deliveryType: true,
+        deliveryPrice: true,
+        // Sensitive data: admin only
         ...(isAdmin && {
-          customerName: true,
           customerPhone: true,
           customerPhone2: true,
-          wilayaName: true,
-          wilayaCode: true,
-          deliveryType: true,
-          deliveryPrice: true,
           address: true,
           officeName: true,
           officeCommune: true,
