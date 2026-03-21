@@ -18,9 +18,9 @@ const ORDERDZ_API_KEY = process.env.ORDERDZ_API_KEY || "";
 // Maps our product slugs to OrderDZ's internal SKU codes.
 // If we add a new product, add its SKU here too.
 const SKU_MAP: Record<string, string> = {
-  "goul-bla-matgoul": "PRDV2E6L",
-  roubla: "PRD92FSO",
-  "eid-bundle-2026": "PRDNAG5A",
+  "goul-bla-matgoul": "PRDPQBZQ",
+  roubla: "PRDAISNA",
+  "eid-bundle-2026": "PRDAYLRL",
 };
 
 interface OrderForConfirmation {
@@ -113,12 +113,22 @@ export async function sendToOrderDZ(
 
     const data = await response.json();
 
-    // Extract OrderDZ's ID from their response (try common field names)
+    // Check if OrderDZ actually accepted the order (not just HTTP 200)
+    if (data.success === false) {
+      console.error(`[OrderDZ] Rejected order #${order.orderNumber}: ${data.message || "unknown reason"}`);
+      return {
+        success: false,
+        externalId: null,
+        error: `rejected: ${data.message || "unknown"}`,
+      };
+    }
+
+    // Extract OrderDZ's ID from their response
     const externalId =
-      data.id ||
-      data.order_id ||
-      data.data?.id ||
       data.data?.order_id ||
+      data.data?.id ||
+      data.order_id ||
+      data.id ||
       null;
 
     console.log(
