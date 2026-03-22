@@ -20,7 +20,7 @@ const ORDERDZ_API_KEY = process.env.ORDERDZ_API_KEY || "";
 const SKU_MAP: Record<string, string> = {
   "goul-bla-matgoul": "PRDPQBZQ",
   roubla: "PRDAISNA",
-  "eid-bundle-2026": "PRDAYLRL",
+  "eid-2026-bundle": "PRDAYLRL",
 };
 
 interface OrderForConfirmation {
