@@ -107,7 +107,7 @@ export async function sendToOrderDZ(
       return {
         success: false,
         externalId: null,
-        error: `api_error_${response.status}`,
+        error: `api_error_${response.status}: ${errorText}`,
       };
     }
 
@@ -115,11 +115,18 @@ export async function sendToOrderDZ(
 
     // Check if OrderDZ actually accepted the order (not just HTTP 200)
     if (data.success === false) {
-      console.error(`[OrderDZ] Rejected order #${order.orderNumber}: ${data.message || "unknown reason"}`);
+      // Log the FULL response so we can debug validation errors
+      console.error(`[OrderDZ] Rejected order #${order.orderNumber}:`, JSON.stringify(data));
+      // Build a detailed error message including validation details
+      const details = data.errors
+        ? JSON.stringify(data.errors)
+        : data.data
+          ? JSON.stringify(data.data)
+          : data.message || "unknown";
       return {
         success: false,
         externalId: null,
-        error: `rejected: ${data.message || "unknown"}`,
+        error: `rejected: ${details}`,
       };
     }
 
