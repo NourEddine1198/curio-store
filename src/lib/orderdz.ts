@@ -82,6 +82,7 @@ export async function sendToOrderDZ(
       total: order.total,
       notes: order.notes || "",
       items: order.items.map((item) => ({
+        item_name: item.productName,
         price: item.unitPrice,
         quantity: item.quantity,
         sku: SKU_MAP[item.slug] || "",
