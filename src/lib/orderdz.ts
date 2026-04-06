@@ -85,9 +85,10 @@ export async function sendToOrderDZ(
         item_name: item.productName,
         price: item.unitPrice,
         quantity: item.quantity,
-        sku: SKU_MAP[item.slug] || "",
-        variants: "",
-        offer: "",
+        // SKU disabled — OrderDZ crashes (500) when any of our product SKUs
+        // are sent. Fake/empty SKUs work fine. This is a bug on their side.
+        // TODO: Re-enable once OrderDZ fixes their product database for our account
+        // sku: SKU_MAP[item.slug] || "",
       })),
     };
 
