@@ -221,7 +221,6 @@ export async function POST(request: NextRequest) {
       wilayaCode,
       deliveryType, // "HOME" or "OFFICE"
       address,
-      commune,       // commune name for HOME delivery
       officeName,
       officeCommune,
       couponCode,
@@ -375,7 +374,7 @@ export async function POST(request: NextRequest) {
         deliveryType,
         address: deliveryType === "HOME" ? address.trim() : null,
         officeName: deliveryType === "OFFICE" ? officeName : null,
-        officeCommune: deliveryType === "OFFICE" ? officeCommune : (commune || null),
+        officeCommune: deliveryType === "OFFICE" ? officeCommune : null,
         deliveryPrice,
         subtotal,
         total,

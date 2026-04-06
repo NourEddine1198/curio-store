@@ -48,7 +48,7 @@ export async function createParcel(order: OrderWithItems): Promise<EcotrackResul
     nom_client: order.customerName,
     telephone: order.customerPhone,
     adresse: isOffice ? (order.officeName || "") : (order.address || ""),
-    commune: order.officeCommune || "",
+    commune: isOffice ? (order.officeCommune || "") : order.wilayaName,
     code_wilaya: parseInt(order.wilayaCode, 10),
     montant: order.total,
     type: 1, // 1 = Livraison (standard delivery)
