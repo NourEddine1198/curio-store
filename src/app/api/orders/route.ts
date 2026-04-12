@@ -313,6 +313,7 @@ export async function POST(request: NextRequest) {
 
     let subtotal = 0;
     const orderItems: { productId: string; quantity: number; unitPrice: number }[] = [];
+    let hasWaitlistItem = false;
 
     for (const item of items) {
       const product = item.slug ? productBySlug.get(item.slug) : productById.get(item.productId);
@@ -325,8 +326,12 @@ export async function POST(request: NextRequest) {
       // Check stock but DON'T decrement it.
       // Stock is only decremented when order is CONFIRMED.
       // This prevents fake orders from draining inventory.
-      if (qty > product.stock) {
+      // When stock = 0, accept as waitlist (for next batch contact).
+      if (product.stock > 0 && qty > product.stock) {
         return badRequest(`${product.name} — الكمية المطلوبة غير متوفرة (باقي ${product.stock})`);
+      }
+      if (product.stock <= 0) {
+        hasWaitlistItem = true;
       }
 
       orderItems.push({
@@ -361,6 +366,12 @@ export async function POST(request: NextRequest) {
         ? `كود التخفيض: ${couponCode} (-${discountAmount} دج)`
         : `كود التخفيض: ${couponCode}`;
       orderNotes = couponInfo + (notes ? " | " + notes : "");
+    }
+
+    // Append waitlist flag if any product was out of stock
+    if (hasWaitlistItem) {
+      const waitlistNote = "⏳ waitlist — منتج نسالو وقت الطلب";
+      orderNotes = orderNotes ? orderNotes + " | " + waitlistNote : waitlistNote;
     }
 
     // --- Create order (NO stock decrement — that happens on confirmation) ---
