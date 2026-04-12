@@ -148,21 +148,10 @@ export async function PATCH(
         updateData.returnedAt = new Date();
       }
 
-      // CONFIRMED → decrement stock (stock is only decremented here, not on order creation)
-      if (status === "CONFIRMED" && existing.status !== "CONFIRMED") {
-        const items = await db.orderItem.findMany({
-          where: { orderId: existing.id },
-        });
-        for (const item of items) {
-          await db.product.update({
-            where: { id: item.productId },
-            data: { stock: { decrement: item.quantity } },
-          });
-        }
-      }
+      // Stock is decremented on order creation now, not on confirmation.
 
-      // CANCELLED → restore stock (only if it was previously confirmed)
-      if (status === "CANCELLED" && existing.status === "CONFIRMED") {
+      // CANCELLED → restore stock (from any previous status, since stock was taken at order creation)
+      if (status === "CANCELLED" && existing.status !== "CANCELLED") {
         const items = await db.orderItem.findMany({
           where: { orderId: existing.id },
         });

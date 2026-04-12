@@ -119,21 +119,10 @@ export async function POST(request: NextRequest) {
       updateData.confirmedAt = new Date();
     }
 
-    // CONFIRMED → decrement stock (stock is no longer decremented on order creation)
-    if (newStatus === "CONFIRMED" && order.status !== "CONFIRMED") {
-      const items = await db.orderItem.findMany({
-        where: { orderId: order.id },
-      });
-      for (const item of items) {
-        await db.product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.quantity } },
-        });
-      }
-    }
+    // Stock is decremented on order creation now, not on confirmation.
 
-    // CANCELLED → restore stock (only if previously confirmed)
-    if (newStatus === "CANCELLED" && order.status === "CONFIRMED") {
+    // CANCELLED → restore stock (from any previous status, since stock was taken at order creation)
+    if (newStatus === "CANCELLED" && order.status !== "CANCELLED") {
       const items = await db.orderItem.findMany({
         where: { orderId: order.id },
       });

@@ -394,7 +394,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Create order items one by one
+    // Create order items and decrement stock immediately
     for (const item of orderItems) {
       await db.orderItem.create({
         data: {
@@ -406,9 +406,13 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // NOTE: Stock is NOT decremented here anymore.
-    // Stock decreases only when order status → CONFIRMED (via webhook or admin).
-    // This prevents fake/bot orders from draining inventory.
+    // Decrement stock immediately when order is placed
+    for (const item of orderItems) {
+      await db.product.update({
+        where: { id: item.productId },
+        data: { stock: { decrement: item.quantity } },
+      });
+    }
 
     // --- Auto-send to OrderDZ for confirmation ---
     try {
