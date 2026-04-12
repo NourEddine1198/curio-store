@@ -33,10 +33,7 @@ export async function GET() {
     });
 
     const response = NextResponse.json({ products: result });
-    response.headers.set(
-      "Cache-Control",
-      "public, s-maxage=30, stale-while-revalidate=60"
-    );
+    response.headers.set("Cache-Control", "no-store");
     return response;
   } catch (error) {
     console.error("GET /api/stock error:", error);
