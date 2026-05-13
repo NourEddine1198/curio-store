@@ -91,14 +91,26 @@ export async function sendToOrderDZ(
 
     const url = `${ORDERDZ_BASE_URL}/orders/create`;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${ORDERDZ_API_KEY}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    // 2s timeout so a hung connection to OrderDZ can never tie up the
+    // serverless function past Netlify's 10s budget and flip a 201 into
+    // a 502. Fire-and-forget pattern — if the timeout fires, we log
+    // and continue.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${ORDERDZ_API_KEY}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

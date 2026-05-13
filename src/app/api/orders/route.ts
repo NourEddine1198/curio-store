@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendToOrderDZ } from "@/lib/orderdz";
+import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
 
 // ─── Validation helpers ──────────────────────────────────
 
@@ -451,6 +452,40 @@ export async function POST(request: NextRequest) {
       }
     } catch (err) {
       console.error("[OrderDZ] Auto-send failed (order saved anyway):", err);
+    }
+
+    // --- Auto-queue Confirmi Voice (AI confirmation call) ---
+    // Mirrors the OrderDZ fire-and-forget pattern. Confirmi schedules
+    // an AI confirmation dial ~60-120s later. Env-gated: when
+    // CONFIRMI_VOICE_URL/SECRET are unset, this returns silently.
+    try {
+      const confirmiItems = orderItems.map((item) => {
+        const product = productById.get(item.productId);
+        return {
+          productSlug: product?.slug ?? "",
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        };
+      });
+      await sendToConfirmiVoice({
+        orderNumber: order.orderNumber,
+        createdAt: order.createdAt,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        customerPhone2: order.customerPhone2,
+        wilayaCode: order.wilayaCode,
+        wilayaName: order.wilayaName,
+        deliveryType: order.deliveryType,
+        address: order.address,
+        officeName: order.officeName,
+        officeCommune: order.officeCommune,
+        deliveryPrice: order.deliveryPrice,
+        total: order.total,
+        notes: order.notes,
+        items: confirmiItems,
+      });
+    } catch (err) {
+      console.error("[ConfirmiVoice] Auto-send failed (order saved anyway):", err);
     }
 
     // --- Return success ---
