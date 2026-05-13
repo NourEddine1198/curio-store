@@ -156,15 +156,17 @@ export function OrderSuccessClient({
     );
   }
 
-  // dispatched
+  // dispatched — the bridge accepted the dial; phone is ringing or
+  // about to ring in the next ~5-15s. NOT the "call complete" state —
+  // there's no terminal "ended" state in this v1 status endpoint.
   return (
     <div className="space-y-3 text-center">
       <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
-        <span className="h-2 w-2 rounded-full bg-emerald-400" />
-        التصال تم
+        <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+        التصال راه يدير الرنين
       </div>
       <p className="text-sm text-neutral-300">
-        تأكد طلبك. غادي تستلمو في الأيام الجايين.
+        جاوب التليفون 📱 ـ أمين راه يحضر بش يعيط ليك
       </p>
       <p className="text-xs text-neutral-500">رقم الطلب: #{orderNumber}</p>
     </div>
