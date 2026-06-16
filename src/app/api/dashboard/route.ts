@@ -105,46 +105,59 @@ export async function GET(request: NextRequest) {
       globalStatusCounts[key] = (globalStatusCounts[key] || 0) + 1;
     }
 
-    // Match a store order to its best Ecotrack record by phone + closest date.
+    // Stage resolution (v3 — the DB is the source of truth):
+    //  1) If the DB status is already TERMINAL (delivered/returned/cancelled),
+    //     trust it — the delivery sync freezes the real outcome there, and it
+    //     never "ages off" the way a live Ecotrack lookup does.
+    //  2) Otherwise the order is still in-flight → enrich from a live Ecotrack
+    //     phone-match (best-effort, until the sync freezes it).
+    //  3) Otherwise fall back to the in-flight DB status.
     let matchedCount = 0;
     const stageByOrder = new Map<number, Stage>();
     for (const o of orders) {
-      const phone = normalizePhone(o.customerPhone);
-      const candidates = phone ? ecoByPhone.get(phone) : undefined;
       let stage: Stage | null = null;
 
-      if (candidates && candidates.length) {
-        // Pick the Ecotrack order closest in time to this store order.
-        // Guard with a 60-day window so a repeat customer's NEW Ecotrack
-        // parcel can't mislabel an OLD store order with the same phone.
-        const MATCH_WINDOW_MS = 60 * 86400000;
-        const oTime = o.createdAt.getTime();
-        let best = candidates[0];
-        let bestDiff = Infinity;
-        for (const c of candidates) {
-          const ct = c.createdAt ? new Date(c.createdAt).getTime() : oTime;
-          const diff = Math.abs(ct - oTime);
-          if (diff < bestDiff) { bestDiff = diff; best = c; }
-        }
-        if (bestDiff <= MATCH_WINDOW_MS) {
-          matchedCount += 1;
-          stage =
-            best.bucket === "delivered" ? "delivered"
-            : best.bucket === "returned" ? "returned"
-            : best.bucket === "cancelled" ? "cancelled"
-            : "in_transit";
+      // 1) DB-primary for terminal states.
+      switch (o.status) {
+        case "DELIVERED": stage = "delivered"; break;
+        case "RETURNED": stage = "returned"; break;
+        case "CANCELLED": stage = "cancelled"; break;
+      }
+
+      // 2) Live Ecotrack enrichment — only for orders still in flight.
+      if (!stage) {
+        const phone = normalizePhone(o.customerPhone);
+        const candidates = phone ? ecoByPhone.get(phone) : undefined;
+        if (candidates && candidates.length) {
+          // Closest in time within a 60-day window so a repeat customer's NEW
+          // parcel can't mislabel an OLD store order with the same phone.
+          const MATCH_WINDOW_MS = 60 * 86400000;
+          const oTime = o.createdAt.getTime();
+          let best = candidates[0];
+          let bestDiff = Infinity;
+          for (const c of candidates) {
+            const ct = c.createdAt ? new Date(c.createdAt).getTime() : oTime;
+            const diff = Math.abs(ct - oTime);
+            if (diff < bestDiff) { bestDiff = diff; best = c; }
+          }
+          if (bestDiff <= MATCH_WINDOW_MS) {
+            matchedCount += 1;
+            stage =
+              best.bucket === "delivered" ? "delivered"
+              : best.bucket === "returned" ? "returned"
+              : best.bucket === "cancelled" ? "cancelled"
+              : "in_transit";
+          }
         }
       }
 
+      // 3) Fall back to the in-flight DB status.
       if (!stage) {
         switch (o.status) {
           case "PENDING": stage = "pending"; break;
           case "CONFIRMED":
           case "PROCESSING": stage = "confirmed"; break;
           case "SHIPPED": stage = "in_transit"; break;
-          case "DELIVERED": stage = "delivered"; break;
-          case "RETURNED": stage = "returned"; break;
-          case "CANCELLED": stage = "cancelled"; break;
           default: stage = "pending";
         }
       }

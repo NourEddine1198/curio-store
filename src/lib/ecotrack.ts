@@ -247,6 +247,8 @@ export async function fetchOrderStatuses(
 
 export interface EcotrackOrder {
   reference: string | null;
+  tracking: string; // Ecotrack tracking code (captured for matching/audit)
+  produit: string; // product description string (agent-editable in OrderDZ — weak signal)
   phone: string; // normalized to last 9 digits
   phone2: string;
   status: string; // detailed French status
@@ -256,6 +258,23 @@ export interface EcotrackOrder {
   montant: number;
   createdAt: string | null;
   bucket: DeliveryBucket;
+}
+
+/**
+ * STRICT terminal classifier — for the irreversible FREEZE decision only.
+ * Trusts ONLY the clean `global_status` prefix; ignores bare `livred_at` /
+ * `return_asked_at` and the detailed-status fallback, so a return REQUEST or a
+ * mid-transit return leg is NEVER frozen. Returns null if not clearly terminal.
+ */
+export function strictTerminalBucket(o: { globalStatus?: string | null }): "delivered" | "returned" | null {
+  const g = (o.globalStatus || "")
+    .toString()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, ""); // strip accents → "livré" → "livre"
+  if (g.startsWith("retour")) return "returned";
+  if (g.startsWith("livre")) return "delivered";
+  return null;
 }
 
 export interface EcotrackListResult {
@@ -306,7 +325,7 @@ export function bucketEcotrackOrder(o: {
  * Fetch all in-process orders from Ecotrack (paginated, ~40/page).
  * Read-only GET. `maxPages` caps the work as volume grows.
  */
-export async function fetchAllEcotrackOrders(maxPages = 30): Promise<EcotrackListResult> {
+export async function fetchAllEcotrackOrders(maxPages = 60): Promise<EcotrackListResult> {
   const token = process.env.ECOTRACK_TOKEN;
   if (!token) return { ok: false, error: "ECOTRACK_TOKEN is not set", orders: [], pages: 0 };
 
@@ -324,6 +343,10 @@ export async function fetchAllEcotrackOrders(maxPages = 30): Promise<EcotrackLis
       for (const o of data) {
         const eo = {
           reference: (o.reference as string) ?? null,
+          // Field names below confirmed against a real /get/orders response in the
+          // dry-run; `tracking` falls back across the likely keys defensively.
+          tracking: String(o.tracking || o.tracking_code || o.code || ""),
+          produit: String(o.produit || o.products || ""),
           phone: normalizePhone(o.phone as string),
           phone2: normalizePhone(o.phone_2 as string),
           status: (o.status as string) || "",
