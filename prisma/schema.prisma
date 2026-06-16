@@ -101,6 +101,22 @@ model Wilaya {
   active     Boolean @default(true)
 }
 
+// ─── Command Center "reads" — the AI co-founder routine output ──
+// Each scheduled read (daily/weekly) is stored here. This is both the
+// routine's MEMORY (it reads the last few to spot what changed) and what
+// the dashboard's "Ask Claude" panel displays. Written by the routine;
+// read by the dashboard + the routine. Never affects orders.
+model CommandRead {
+  id        String   @id @default(cuid())
+  kind      String   @default("daily") // "daily" | "weekly"
+  title     String                     // the headline
+  content   String   @db.Text          // the full read (plain / markdown)
+  metrics   Json?                      // snapshot of key numbers, for diffing next run
+  createdAt DateTime @default(now())
+
+  @@index([kind, createdAt])
+}
+
 // ─── Enums ──────────────────────────────────────────────────
 enum OrderStatus {
   PENDING          // Just placed

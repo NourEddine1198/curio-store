@@ -53,7 +53,7 @@ interface OrderRow {
   subtotal: number;
   createdAt: Date;
   customerPhone: string;
-  items: { quantity: number; product: { slug: string } | null }[];
+  items: { quantity: number; unitPrice: number; product: { slug: string } | null }[];
 }
 
 export async function GET(request: NextRequest) {
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
           subtotal: true,
           createdAt: true,
           customerPhone: true,
-          items: { select: { quantity: true, product: { select: { slug: true } } } },
+          items: { select: { quantity: true, unitPrice: true, product: { select: { slug: true } } } },
         },
         orderBy: { createdAt: "desc" },
         take: 8000,
@@ -175,17 +175,35 @@ export async function GET(request: NextRequest) {
       let deliveredRevenue = 0;
       const perProductDeliveredUnits: Record<string, number> = {};
 
+      // Per-product breakdown for the new "Daily" cards.
+      const perProduct: Record<string, { orders: number; deliveredUnits: number; deliveredRevenue: number; returned: number; attempts: number }> = {};
+      const pp = (slug: string) =>
+        perProduct[slug] || (perProduct[slug] = { orders: 0, deliveredUnits: 0, deliveredRevenue: 0, returned: 0, attempts: 0 });
+
       for (const o of subset) {
         const stage = stageByOrder.get(o.orderNumber) || "pending";
         funnel[stage] += 1;
+        const slugSet = new Set<string>();
+        for (const it of o.items) slugSet.add(it.product?.slug || "unknown");
+        const slugs = Array.from(slugSet);
+
         if (stage === "confirmed" || stage === "in_transit" || stage === "delivered") {
           confirmedRevenue += o.subtotal;
         }
+        if (stage === "delivered" || stage === "returned" || stage === "in_transit") {
+          for (const s of slugs) pp(s).attempts += 1;
+        }
+        if (stage === "returned") {
+          for (const s of slugs) pp(s).returned += 1;
+        }
         if (stage === "delivered") {
           deliveredRevenue += o.subtotal;
+          for (const s of slugs) pp(s).orders += 1;
           for (const it of o.items) {
             const slug = it.product?.slug || "unknown";
             perProductDeliveredUnits[slug] = (perProductDeliveredUnits[slug] || 0) + it.quantity;
+            pp(slug).deliveredUnits += it.quantity;
+            pp(slug).deliveredRevenue += (it.unitPrice || 0) * it.quantity;
           }
         }
       }
@@ -207,8 +225,26 @@ export async function GET(request: NextRequest) {
         deliveredCount, returnedCount, inTransitCount, attempts,
         returns: { count: returnedCount, ratePct: returnRatePct },
         perProductDeliveredUnits,
+        perProduct,
       };
     };
+
+    // ── Weekly trend (last 8 rolling 7-day buckets) for the War Room chart ──
+    const WEEKS = 8;
+    const weekly: { weekStart: string; orders: number; deliveredRevenue: number }[] = [];
+    for (let w = WEEKS - 1; w >= 0; w--) {
+      const start = new Date(now.getTime() - (w + 1) * 7 * 86400000);
+      const end = new Date(now.getTime() - w * 7 * 86400000);
+      let ord = 0;
+      let drev = 0;
+      for (const o of orders) {
+        if (o.createdAt >= start && o.createdAt < end) {
+          ord += 1;
+          if ((stageByOrder.get(o.orderNumber) || "pending") === "delivered") drev += o.subtotal;
+        }
+      }
+      weekly.push({ weekStart: start.toISOString(), orders: ord, deliveredRevenue: drev });
+    }
 
     // Trend = orders count current vs previous equal window.
     const countIn = (from: Date, to?: Date) =>
@@ -233,6 +269,7 @@ export async function GET(request: NextRequest) {
         month: metricsFor(d30, "Last 30 days", 30),
         all: metricsFor(null, "All time", allDays),
       },
+      weekly,
       inventory: products.map((p) => ({
         slug: p.slug, name: p.name, nameEn: p.nameEn, stock: p.stock, price: p.price,
       })),
