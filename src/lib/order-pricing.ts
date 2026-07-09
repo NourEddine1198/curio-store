@@ -1,4 +1,4 @@
-import { dbPg } from "@/lib/db-pg";
+import { db } from "@/lib/db";
 
 export interface Reprice {
   ok: boolean;
@@ -22,7 +22,7 @@ export async function repriceOrder(input: {
   const items = (input.items || []).filter((i) => i && i.slug && Number(i.quantity) > 0);
   if (items.length === 0) return { ...empty, error: "لازم منتج واحد على الأقل" };
 
-  const products = await dbPg.product.findMany({ where: { slug: { in: items.map((i) => i.slug) } } });
+  const products = await db.product.findMany({ where: { slug: { in: items.map((i) => i.slug) } } });
   const bySlug = new Map(products.map((p) => [p.slug, p]));
 
   let subtotal = 0;
@@ -35,7 +35,7 @@ export async function repriceOrder(input: {
     orderItems.push({ productId: p.id, quantity: qty, unitPrice: p.price });
   }
 
-  const wilaya = await dbPg.wilaya.findUnique({ where: { code: input.wilayaCode } });
+  const wilaya = await db.wilaya.findUnique({ where: { code: input.wilayaCode } });
   if (!wilaya) return { ...empty, error: "الولاية غير موجودة" };
   const deliveryPrice = input.deliveryType === "OFFICE" ? wilaya.officePrice : wilaya.homePrice;
 

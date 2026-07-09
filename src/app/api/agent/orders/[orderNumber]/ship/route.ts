@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dbPg } from "@/lib/db-pg";
 import { agentFromRequest } from "@/lib/agent-guard";
 import { createParcel } from "@/lib/ecotrack";
 
@@ -35,7 +34,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (result.trackingCode) updateData.trackingCode = result.trackingCode;
     updateData.webhookPayload = result.rawResponse as never;
 
-    await dbPg.order.update({ where: { orderNumber: num }, data: updateData });
+    await db.order.update({ where: { orderNumber: num }, data: updateData });
 
     const updated = await db.order.findUnique({
       where: { orderNumber: num },

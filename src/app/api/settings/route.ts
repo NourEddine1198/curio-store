@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dbPg } from "@/lib/db-pg";
 
 // Small key/value settings store (owner only). Used for things like the
 // confirmation cutover date. GET returns all; PUT upserts one { key, value }.
@@ -26,7 +25,7 @@ export async function PUT(request: NextRequest) {
     const key = String(body?.key || "").trim();
     const value = String(body?.value ?? "");
     if (!key) return NextResponse.json({ error: "key required" }, { status: 400 });
-    const row = await dbPg.siteSetting.upsert({
+    const row = await db.siteSetting.upsert({
       where: { key },
       create: { key, value },
       update: { value },

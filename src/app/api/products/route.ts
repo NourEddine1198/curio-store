@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dbPg } from "@/lib/db-pg";
 
 // Always serve fresh product data (stock/new products must not be cached).
 export const dynamic = "force-dynamic";
@@ -66,7 +65,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "nothing to update" }, { status: 400 });
     }
 
-    const product = await dbPg.product.update({
+    const product = await db.product.update({
       where,
       data,
       select: { slug: true, name: true, price: true, compareAt: true, stock: true, active: true },

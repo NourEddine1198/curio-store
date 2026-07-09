@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dbPg } from "@/lib/db-pg";
 import { hashPassword } from "@/lib/agent-auth";
 
 // Agent management — OWNER only (guarded by the admin key).
@@ -47,7 +46,7 @@ export async function POST(request: NextRequest) {
     const existing = await db.agent.findUnique({ where: { username } });
     if (existing) return NextResponse.json({ error: "username موجود من قبل" }, { status: 409 });
 
-    const agent = await dbPg.agent.create({
+    const agent = await db.agent.create({
       data: { name, username, passwordHash: hashPassword(password), role },
     });
     return NextResponse.json({ success: true, agent: publicAgent(agent) }, { status: 201 });
@@ -75,7 +74,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "walou to update" }, { status: 400 });
     }
 
-    const agent = await dbPg.agent.update({ where: { id }, data });
+    const agent = await db.agent.update({ where: { id }, data });
     return NextResponse.json({ success: true, agent: publicAgent(agent) });
   } catch (error) {
     console.error("PATCH /api/agents error:", error);

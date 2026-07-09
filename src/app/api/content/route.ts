@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dbPg } from "@/lib/db-pg";
 
 // This route powers the mini-CMS.
 //   GET  /api/content?page=roubla   → public. Returns { key: value } for that page.
@@ -113,7 +112,7 @@ export async function POST(request: NextRequest) {
       let lastErr: unknown = null;
       for (let attempt = 0; attempt < 3 && !saved; attempt++) {
         try {
-          const row = await dbPg.pageContent.upsert({
+          const row = await db.pageContent.upsert({
             where: { key: item.key },
             create: data.create,
             update: data.update,
@@ -149,7 +148,7 @@ export async function DELETE(request: NextRequest) {
     if (!Array.isArray(keys) || keys.length === 0) {
       return NextResponse.json({ error: "Body must have keys: [...]" }, { status: 400 });
     }
-    const result = await dbPg.pageContent.deleteMany({ where: { key: { in: keys } } });
+    const result = await db.pageContent.deleteMany({ where: { key: { in: keys } } });
     return NextResponse.json({ success: true, deleted: result.count });
   } catch (error) {
     console.error("DELETE /api/content error:", error);

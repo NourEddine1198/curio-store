@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dbPg } from "@/lib/db-pg";
 import { agentFromRequest } from "@/lib/agent-guard";
 import { repriceOrder } from "@/lib/order-pricing";
 
@@ -97,14 +96,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         orderData.commune = null;
       }
 
-      // Replace items + update order atomically (pg adapter supports transactions)
-      await dbPg.$transaction([
-        dbPg.orderItem.deleteMany({ where: { orderId: existing.id } }),
-        ...priced.orderItems.map((oi) =>
-          dbPg.orderItem.create({ data: { orderId: existing.id, productId: oi.productId, quantity: oi.quantity, unitPrice: oi.unitPrice } })
-        ),
-        dbPg.order.update({ where: { id: existing.id }, data: orderData }),
-      ]);
+      // Replace items, then update the order. The Neon HTTP driver has no
+      // transactions, so do it sequentially (edits are rare + admin-driven).
+      await db.orderItem.deleteMany({ where: { orderId: existing.id } });
+      for (const oi of priced.orderItems) {
+        await db.orderItem.create({ data: { orderId: existing.id, productId: oi.productId, quantity: oi.quantity, unitPrice: oi.unitPrice } });
+      }
+      await db.order.update({ where: { id: existing.id }, data: orderData });
 
       return NextResponse.json({ success: true, order: await loadOrder(num) });
     }
@@ -144,7 +142,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         data.status = "CANCELLED";
       }
 
-      await dbPg.order.update({ where: { id: existing.id }, data });
+      await db.order.update({ where: { id: existing.id }, data });
       return NextResponse.json({ success: true, order: await loadOrder(num) });
     }
 
