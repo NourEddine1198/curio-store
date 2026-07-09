@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
 
     const orders = await db.order.findMany({
       where: { status: { in: statuses as never }, ...dateFilter },
+      omit: { ip: true, webhookPayload: true, externalId: true },
       include: {
         items: { include: { product: { select: { name: true, slug: true } } } },
         assignedAgent: { select: { id: true, name: true } },

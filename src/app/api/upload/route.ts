@@ -12,13 +12,14 @@ export const fetchCache = "force-no-store";
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
 
+// Raster image types only. SVG is intentionally EXCLUDED — SVGs can carry
+// <script> and would execute when served from our origin (stored XSS).
 const EXT: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
   "image/gif": "gif",
   "image/avif": "avif",
-  "image/svg+xml": "svg",
 };
 
 export async function POST(request: NextRequest) {
@@ -38,9 +39,14 @@ export async function POST(request: NextRequest) {
     const ext = EXT[contentType];
     if (!ext) {
       return NextResponse.json(
-        { error: "Unsupported file type (use JPG, PNG, WEBP, GIF, AVIF or SVG)" },
+        { error: "Unsupported file type (use JPG, PNG, WEBP, GIF or AVIF)" },
         { status: 400 }
       );
+    }
+
+    // Reject by declared size BEFORE buffering (avoid loading huge files into memory).
+    if (typeof file.size === "number" && file.size > MAX_BYTES) {
+      return NextResponse.json({ error: "Image too big (max 8 MB)" }, { status: 400 });
     }
 
     const data = await file.arrayBuffer();

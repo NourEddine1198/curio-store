@@ -16,9 +16,11 @@ const VALID_STATUSES = [
 ];
 
 // ─── GET /api/orders/[orderNumber] — Order summary ───────
-// PUBLIC but SAFE: only returns order number, status, and total.
-// No personal data (name, phone, address) is exposed.
-// Admin gets full details via the admin GET /api/orders endpoint.
+// PUBLIC but SAFE: returns only non-identifying fields (order number, status,
+// total, delivery type/price, item names). Customer identity + location
+// (name, wilaya, phone, address) are ADMIN-ONLY — otherwise the sequential
+// orderNumber could be enumerated to harvest every buyer's name + region.
+// Admin gets full details here (with x-admin-key) or via GET /api/orders.
 
 export async function GET(
   request: Request,
@@ -43,16 +45,16 @@ export async function GET(
         status: true,
         total: true,
         createdAt: true,
-        // Public display fields (needed for thank-you page)
-        customerName: true,
-        wilayaName: true,
-        wilayaCode: true,
         deliveryType: true,
         deliveryPrice: true,
-        // Sensitive data: admin only
+        // Identity + location + everything else: ADMIN ONLY.
         ...(isAdmin && {
+          customerName: true,
+          wilayaName: true,
+          wilayaCode: true,
           customerPhone: true,
           customerPhone2: true,
+          commune: true,
           address: true,
           officeName: true,
           officeCommune: true,

@@ -16,6 +16,7 @@ const RETRY_INTERVAL_MS = 8 * 60 * 60 * 1000;
 async function loadOrder(num: number) {
   return db.order.findUnique({
     where: { orderNumber: num },
+    omit: { ip: true, webhookPayload: true, externalId: true },
     include: {
       items: { include: { product: { select: { name: true, slug: true, nameEn: true } } } },
       assignedAgent: { select: { id: true, name: true } },

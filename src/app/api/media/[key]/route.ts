@@ -19,6 +19,10 @@ export async function GET(
         "Content-Type": media.contentType,
         // Uploaded images are immutable (unique random key), cache hard.
         "Cache-Control": "public, max-age=31536000, immutable",
+        // Defense-in-depth: never sniff, and neutralise any active content if a
+        // non-raster file is ever served (SVG is already blocked at upload).
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
       },
     });
   } catch (error) {

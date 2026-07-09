@@ -126,8 +126,10 @@ export async function POST(request: NextRequest) {
         }
       }
       if (!saved) {
+        // Log the raw driver error server-side; return only a generic message
+        // to the client (don't leak DB/schema internals).
         console.error(`content upsert failed for key "${item.key}":`, lastErr);
-        errors.push({ key: item.key, error: String((lastErr as Error)?.message || lastErr) });
+        errors.push({ key: item.key, error: "save failed" });
       }
     }
 
