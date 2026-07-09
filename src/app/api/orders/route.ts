@@ -221,6 +221,7 @@ export async function POST(request: NextRequest) {
       customerPhone2,
       wilayaCode,
       deliveryType, // "HOME" or "OFFICE"
+      commune,      // baladiya name (Ecotrack commune) — required for HOME
       address,
       officeName,
       officeCommune,
@@ -267,7 +268,11 @@ export async function POST(request: NextRequest) {
       return badRequest("دخل العنوان بالتفصيل (5 حروف على الأقل)");
     }
 
-    if (deliveryType === "OFFICE" && (!officeName || !officeCommune)) {
+    if (deliveryType === "HOME" && (!commune || typeof commune !== "string" || !commune.trim())) {
+      return badRequest("اختار البلدية");
+    }
+
+    if (deliveryType === "OFFICE" && !officeCommune) {
       return badRequest("اختار المكتب لي تحب تستلم منه");
     }
 
@@ -384,8 +389,9 @@ export async function POST(request: NextRequest) {
         wilayaCode,
         wilayaName: wilaya.name,
         deliveryType,
+        commune: deliveryType === "HOME" ? commune.trim() : null,
         address: deliveryType === "HOME" ? address.trim() : null,
-        officeName: deliveryType === "OFFICE" ? officeName : null,
+        officeName: deliveryType === "OFFICE" ? (officeName || null) : null,
         officeCommune: deliveryType === "OFFICE" ? officeCommune : null,
         deliveryPrice,
         subtotal,
@@ -416,6 +422,9 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Auto-send to OrderDZ for confirmation ---
+    // DISABLED (Jul 2026): Curio now confirms in-house via its own console.
+    // Kept behind a flag so it can be re-enabled instantly if ever needed.
+    if (process.env.ORDERDZ_ENABLED === "true") {
     try {
       const confirmationItems = orderItems.map((item) => {
         const product = productById.get(item.productId);
@@ -453,6 +462,7 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.error("[OrderDZ] Auto-send failed (order saved anyway):", err);
     }
+    } // end ORDERDZ_ENABLED gate
 
     // --- Auto-queue Confirmi Voice (AI confirmation call) ---
     // Mirrors the OrderDZ fire-and-forget pattern. Confirmi schedules

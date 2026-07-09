@@ -11,6 +11,11 @@ const DEV_ORIGINS = [
   "http://localhost:5500",
   "http://127.0.0.1:5500",
   "http://localhost:3000",
+  "http://localhost:5510",   // local static page server (pages/)
+  "http://127.0.0.1:5510",
+  "http://localhost:5514",
+  "http://localhost:5512",   // local frontend-repo test server
+  "http://127.0.0.1:5512",
 ];
 
 const ALLOWED_ORIGINS = process.env.NODE_ENV === "production"
@@ -21,7 +26,7 @@ function getCorsHeaders(origin: string | null) {
   const isAllowed = origin && ALLOWED_ORIGINS.includes(origin);
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key, X-Webhook-Secret",
     "Access-Control-Max-Age": "86400",
   };

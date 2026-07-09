@@ -37,3 +37,9 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated
+
+# local dev image uploads (Netlify Blobs used in prod)
+.media-dev/
+
+# one-off local admin scripts (not part of the app/build)
+scripts/

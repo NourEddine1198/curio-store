@@ -40,9 +40,10 @@ model Order {
   wilayaCode      String                    // "16" for Algiers
   wilayaName      String                    // "الجزائر"
   deliveryType    DeliveryType              // HOME or OFFICE
+  commune         String?                   // Chosen baladiya (Ecotrack commune name) — for HOME delivery
   address         String?     @db.Text      // Home address (if HOME)
-  officeName      String?                   // Stop-desk office name (if OFFICE)
-  officeCommune   String?                   // Office commune
+  officeName      String?                   // Stop-desk station name (if OFFICE)
+  officeCommune   String?                   // Stop-desk commune (Ecotrack commune name, if OFFICE)
   deliveryPrice   Int         @default(0)   // Delivery cost in DA
 
   // Money
@@ -51,7 +52,16 @@ model Order {
 
   // Fulfillment
   confirmedAt     DateTime?                 // When confirmation agent confirmed
-  confirmedBy     String?                   // Agent name/ID
+  confirmedBy     String?                   // Agent name/username who confirmed
+
+  // ── In-house confirmation workflow (own agents; replaces OrderDZ) ──
+  assignedAgentId String?                   // which agent owns this order
+  assignedAgent   Agent?      @relation("AgentOrders", fields: [assignedAgentId], references: [id])
+  disposition     String?                   // confirmed | no_answer | postponed | cancelled | wrong_number | duplicate
+  callAttempts    Int         @default(0)   // how many times the agent called
+  lastCallAt      DateTime?
+  nextCallAt      DateTime?                  // when to try again (retry scheduling)
+
   shippedAt       DateTime?
   trackingCode    String?                   // Shipping company tracking
   deliveredAt     DateTime?
@@ -76,6 +86,22 @@ model Order {
   @@index([customerPhone])
   @@index([createdAt])
   @@index([ip])
+  @@index([assignedAgentId])
+  @@index([nextCallAt])
+}
+
+// ─── Confirmation agents (in-house team, replaces OrderDZ) ──
+model Agent {
+  id           String   @id @default(cuid())
+  name         String                       // display name
+  username     String   @unique             // login
+  passwordHash String                       // pbkdf2 hash (salt:hash)
+  role         String   @default("agent")   // "agent" | "owner"
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders       Order[]  @relation("AgentOrders")
 }
 
 model OrderItem {
@@ -115,6 +141,33 @@ model CommandRead {
   createdAt DateTime @default(now())
 
   @@index([kind, createdAt])
+}
+
+// ─── Editable page content (the mini-CMS) ──────────────────
+// Every editable piece of text or image on the marketing pages
+// (home / roubla / dlala) is one row here. The live pages fetch
+// these on load and swap them in; the admin panel writes them.
+// Change a row → it's live in seconds, NO re-deploy.
+model PageContent {
+  id        String   @id @default(cuid())
+  page      String                        // "home" | "roubla" | "dlala"
+  key       String   @unique              // "roubla.hero.title"
+  type      String   @default("text")     // "text" | "image"
+  value     String   @db.Text             // the text, or the image URL
+  label     String?                        // human label shown in the admin
+  group     String?                        // admin section, e.g. "Hero", "Pricing"
+  sort      Int      @default(0)           // ordering within a group
+  updatedAt DateTime @updatedAt
+
+  @@index([page])
+}
+
+// ─── Site settings (tiny key/value store) ──────────────────
+// Small global flags/values, e.g. live prices or a launch switch.
+model SiteSetting {
+  key       String   @id                  // "homepageLive", "pack.price"
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
 }
 
 // ─── Enums ──────────────────────────────────────────────────

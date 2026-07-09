@@ -47,8 +47,15 @@ export async function createParcel(order: OrderWithItems): Promise<EcotrackResul
   const payload: EcotrackPayload = {
     nom_client: order.customerName,
     telephone: order.customerPhone,
-    adresse: isOffice ? (order.officeName || "") : (order.address || ""),
-    commune: isOffice ? (order.officeCommune || "") : order.wilayaName,
+    adresse: isOffice
+      ? (order.officeName || order.officeCommune || "")
+      : (order.address || ""),
+    // Ecotrack needs the real baladiya name. For HOME use the chosen commune
+    // (fall back to wilayaName only for legacy orders saved before this field
+    // existed). For OFFICE use the stop-desk commune.
+    commune: isOffice
+      ? (order.officeCommune || "")
+      : (order.commune || order.wilayaName),
     code_wilaya: parseInt(order.wilayaCode, 10),
     montant: order.total,
     type: 1, // 1 = Livraison (standard delivery)
