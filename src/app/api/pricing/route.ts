@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 // marketing pages display live prices (and reflect backend edits without a
 // re-deploy). Includes the bundle even while it's inactive (price only).
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const SLUGS = ["roubla", "dlala", "roubla-dlala-pack", "goul-bla-matgoul"];
 

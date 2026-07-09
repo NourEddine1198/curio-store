@@ -9,6 +9,7 @@ import { db } from "@/lib/db";
 
 // Always read the freshest content (Netlify must not cache this).
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 

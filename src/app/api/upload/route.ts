@@ -7,6 +7,7 @@ import { randomBytes } from "crypto";
 // { url: "/api/media/<key>" } to drop straight into a content field.
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const MAX_BYTES = 8 * 1024 * 1024; // 8 MB

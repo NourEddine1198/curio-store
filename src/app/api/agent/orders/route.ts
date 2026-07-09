@@ -9,6 +9,7 @@ import { agentFromRequest } from "@/lib/agent-guard";
 // Agent-authenticated (Bearer token from /api/agents/login).
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 export async function GET(request: NextRequest) {
   const agent = agentFromRequest(request);

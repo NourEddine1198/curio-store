@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 // funnel, scoped to the in-house era (createdAt >= confirmation cutover) so
 // the pre-cutover OrderDZ backlog doesn't distort agent numbers.
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const CANCEL_DISPOSITIONS = ["cancelled", "wrong_number", "duplicate"];

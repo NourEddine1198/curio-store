@@ -7,6 +7,7 @@ import { verifyPassword, signToken } from "@/lib/agent-auth";
 // PBKDF2 makes brute force slow. Returns a 7-day signed token on success.
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 export async function POST(request: NextRequest) {
   try {

@@ -8,6 +8,7 @@ import { hashPassword } from "@/lib/agent-auth";
 //   PATCH  → update { id, name?, active?, role?, password? }
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 function isOwner(req: NextRequest) {

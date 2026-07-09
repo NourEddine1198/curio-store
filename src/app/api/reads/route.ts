@@ -12,6 +12,7 @@ import { db } from "@/lib/db";
 // ─────────────────────────────────────────────────────────────
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 export const revalidate = 0;
 
 const ADMIN_KEY = process.env.ADMIN_KEY;

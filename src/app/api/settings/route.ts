@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 // Small key/value settings store (owner only). Used for things like the
 // confirmation cutover date. GET returns all; PUT upserts one { key, value }.
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 function isOwner(req: NextRequest) {

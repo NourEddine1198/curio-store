@@ -8,6 +8,7 @@ const PRINT_RUN = 500;
 
 // Force dynamic — disable Next.js ISR/static caching
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 export const revalidate = 0;
 
 export async function GET() {

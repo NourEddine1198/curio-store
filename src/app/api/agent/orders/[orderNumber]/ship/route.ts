@@ -4,6 +4,7 @@ import { agentFromRequest } from "@/lib/agent-guard";
 import { createParcel } from "@/lib/ecotrack";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // POST /api/agent/orders/[orderNumber]/ship — agent sends a confirmed order
 // to Ecotrack (parcel created auto-filled from the order). Agent-authenticated.

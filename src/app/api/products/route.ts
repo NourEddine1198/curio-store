@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 
 // Always serve fresh product data (stock/new products must not be cached).
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 function isAdmin(req: NextRequest) {

@@ -4,6 +4,7 @@ import { agentFromRequest } from "@/lib/agent-guard";
 import { repriceOrder } from "@/lib/order-pricing";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const PHONE_RE = /^0[567]\d{8}$/;
 const DISPOSITIONS = ["confirmed", "no_answer", "postponed", "cancelled", "wrong_number", "duplicate"];

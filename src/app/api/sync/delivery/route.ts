@@ -20,6 +20,7 @@ import { matchOrderToParcel, type MatchInputOrder } from "@/lib/delivery-match";
 // ─────────────────────────────────────────────────────────────
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 export const revalidate = 0;
 export const maxDuration = 60; // seconds (host may cap; page/write caps bound the work)
 
