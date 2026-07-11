@@ -242,6 +242,74 @@ export async function fetchOrderStatuses(
 }
 
 // ─────────────────────────────────────────────────────────────
+// READ-ONLY detailed tracking info (the rescue-loop feed).
+//
+// GET /get/trackings/info returns, per tracking code: the parcel's
+// French display status ("En livraison"), the activity timeline
+// (last item can be "attempt_delivery" = failed attempt, or
+// "livred"), the failed-attempt texts, and driver info. This is
+// what OrderDZ's auto-tracking cron reads. Read-only.
+// ─────────────────────────────────────────────────────────────
+
+export interface EcotrackTrackingInfo {
+  status: string; // French display status, e.g. "En livraison"
+  lastActivityStatus: string | null; // e.g. "attempt_delivery" | "livred"
+  attempts: { text: string; at: string | null; station: string | null }[];
+  driverName: string | null;
+  driverPhone: string | null;
+  stopDesk: boolean | null;
+}
+
+export async function fetchTrackingsInfo(
+  trackings: string[]
+): Promise<{ ok: boolean; error?: string; info: Record<string, EcotrackTrackingInfo> }> {
+  const token = process.env.ECOTRACK_TOKEN;
+  if (!token) return { ok: false, error: "ECOTRACK_TOKEN is not set", info: {} };
+
+  const unique = Array.from(new Set(trackings.filter(Boolean)));
+  const info: Record<string, EcotrackTrackingInfo> = {};
+
+  try {
+    for (let i = 0; i < unique.length; i += 50) {
+      const chunk = unique.slice(i, i + 50);
+      const qs = chunk.map((t) => `trackings[]=${encodeURIComponent(t)}`).join("&");
+      const res = await fetch(`${BASE_URL}/get/trackings/info?${qs}`, {
+        headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return { ok: false, error: `Ecotrack trackings/info error (${res.status})`, info };
+      const json = await res.json();
+      const data = (json && typeof json === "object" ? json : {}) as Record<string, unknown>;
+      for (const [tracking, rawU] of Object.entries(data)) {
+        if (!rawU || typeof rawU !== "object") continue;
+        const raw = rawU as Record<string, unknown>;
+        const activity = Array.isArray(raw.activity) ? (raw.activity as Record<string, unknown>[]) : [];
+        const last = activity.length ? activity[activity.length - 1] : null;
+        const orderInfo = (raw.OrderInfo && typeof raw.OrderInfo === "object" ? raw.OrderInfo : {}) as Record<string, unknown>;
+        const attemptsRaw = Array.isArray(raw.deliveryAttempts) ? (raw.deliveryAttempts as Record<string, unknown>[]) : [];
+        info[tracking] = {
+          status: String(raw.status || ""),
+          lastActivityStatus: last ? String(last.status || "") || null : null,
+          attempts: attemptsRaw
+            .map((a) => ({
+              text: String((a.text_tentative as string) || (a.content as string) || "").trim(),
+              at: (a.created_at as string) || null,
+              station: (a.station as string) || null,
+            }))
+            .filter((a) => a.text),
+          driverName: (orderInfo.driver_name as string) || null,
+          driverPhone: (orderInfo.driver_phone as string) || null,
+          stopDesk: orderInfo.stop_desk == null ? null : Boolean(Number(orderInfo.stop_desk)),
+        };
+      }
+    }
+    return { ok: true, info };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return { ok: false, error: `Network error: ${message}`, info };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // READ-ONLY order list + phone reconciliation (the real bridge).
 //
 // Curio's flow is: website → OrderDZ → (confirmed) → Ecotrack.

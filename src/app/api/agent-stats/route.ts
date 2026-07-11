@@ -41,13 +41,28 @@ export async function GET(request: NextRequest) {
       rows.filter((r) => (r as unknown as Record<string, unknown>)[key] === val)
         .reduce((s, r) => s + r._count._all, 0);
 
-    // Overall funnel (since cutover)
+    // Overall funnel (since cutover) — v2 statuses grouped into stages,
+    // with the working/journey detail exposed alongside.
+    const c = (v: string) => countBy(statusRows, "status", v);
     const funnel = {
       total: statusRows.reduce((s, r) => s + r._count._all, 0),
-      pending: countBy(statusRows, "status", "PENDING"),
-      confirmed: countBy(statusRows, "status", "CONFIRMED"),
-      shipped: countBy(statusRows, "status", "SHIPPED"),
-      cancelled: countBy(statusRows, "status", "CANCELLED"),
+      pending: c("PENDING"),
+      working: c("NO_ANSWER") + c("CALLBACK"),
+      confirmed: c("CONFIRMED") + c("PROCESSING"),
+      shipped: c("SHIPPED") + c("OUT_FOR_DELIVERY") + c("AT_STOPDESK") + c("DELIVERY_FAILED") + c("IN_RETURN"),
+      delivered: c("DELIVERED"),
+      returned: c("RETURNED"),
+      cancelled: c("CANCELLED") + c("WRONG") + c("DUPLICATE") + c("EXPIRED"),
+      // detail (for drill-down displays)
+      noAnswer: c("NO_ANSWER"),
+      callback: c("CALLBACK"),
+      expired: c("EXPIRED"),
+      wrong: c("WRONG"),
+      duplicate: c("DUPLICATE"),
+      deliveryFailed: c("DELIVERY_FAILED"),
+      atStopdesk: c("AT_STOPDESK"),
+      outForDelivery: c("OUT_FOR_DELIVERY"),
+      inReturn: c("IN_RETURN"),
     };
     const dispositions = {
       confirmed: countBy(dispRows, "disposition", "confirmed"),

@@ -16,7 +16,11 @@ type Stats = {
   cutoverAt: string | null;
   today: { confirmed: number; shipped: number };
   week: { confirmed: number; orders: number };
-  funnel: { total: number; pending: number; confirmed: number; shipped: number; cancelled: number };
+  funnel: {
+    total: number; pending: number; working?: number; confirmed: number; shipped: number;
+    delivered?: number; returned?: number; cancelled: number;
+    noAnswer?: number; callback?: number; expired?: number; deliveryFailed?: number;
+  };
   dispositions: Record<string, number>;
   agents: AgentStat[];
 };
@@ -96,12 +100,18 @@ export default function TeamStats() {
 
           <h2>مسار الطلبات (منذ البداية)</h2>
           <div className="ts-funnel">
-            <div className="ts-fc ts-yellow"><b>{f?.pending ?? 0}</b><span>للتأكيد</span></div>
+            <div className="ts-fc ts-yellow"><b>{f?.pending ?? 0}</b><span>جديد</span></div>
+            <div className="ts-fc ts-orange"><b>{f?.working ?? 0}</b><span>يتعالج (ما ردش/معاودة)</span></div>
             <div className="ts-fc ts-green"><b>{f?.confirmed ?? 0}</b><span>مأكد</span></div>
-            <div className="ts-fc ts-blue"><b>{f?.shipped ?? 0}</b><span>مبعوث</span></div>
-            <div className="ts-fc ts-red"><b>{f?.cancelled ?? 0}</b><span>ملغى</span></div>
+            <div className="ts-fc ts-blue"><b>{f?.shipped ?? 0}</b><span>في الطريق</span></div>
+            <div className="ts-fc ts-green"><b>{f?.delivered ?? 0}</b><span>وصل</span></div>
+            <div className="ts-fc ts-red"><b>{f?.returned ?? 0}</b><span>رجع</span></div>
+            <div className="ts-fc ts-red"><b>{f?.cancelled ?? 0}</b><span>ملغى/منتهي</span></div>
             <div className="ts-fc"><b>{f?.total ?? 0}</b><span>المجموع</span></div>
           </div>
+          {(f?.deliveryFailed ?? 0) > 0 && (
+            <div className="ts-alert">تنبيه: {f?.deliveryFailed} طلبات فشل توصيلها — لازم مكالمة إنقاذ (تبان عند العون في تبويب «فشل التسليم»)</div>
+          )}
 
           <h2>نتائج المكالمات</h2>
           <div className="ts-disp">
@@ -162,7 +172,8 @@ const styles = `
   .ts-fc,.ts-d{border:2px solid #161310;border-radius:12px;background:#fff;padding:12px;text-align:center;box-shadow:3px 3px 0 #161310}
   .ts-fc b,.ts-d b{display:block;font-size:1.6rem;font-weight:800;line-height:1}
   .ts-fc span,.ts-d span{font-size:.78rem;color:#675b4c;font-weight:700}
-  .ts-fc.ts-yellow{background:#fff6d6}.ts-fc.ts-green{background:#eaf7e6}.ts-fc.ts-blue{background:#eaf4fb}.ts-fc.ts-red{background:#fdeeee}
+  .ts-fc.ts-yellow{background:#fff6d6}.ts-fc.ts-green{background:#eaf7e6}.ts-fc.ts-blue{background:#eaf4fb}.ts-fc.ts-red{background:#fdeeee}.ts-fc.ts-orange{background:#ffe9d6}
+  .ts-alert{margin-top:10px;background:#fee2e2;border:2px solid #dc2626;border-radius:10px;padding:10px 14px;font-weight:800;font-size:.88rem}
   .ts-table-wrap{overflow-x:auto;border:2px solid #161310;border-radius:14px;box-shadow:4px 4px 0 #161310}
   .ts-table{width:100%;border-collapse:collapse;background:#fffdf7;min-width:560px}
   .ts-table th,.ts-table td{padding:10px 12px;text-align:center;border-bottom:1px solid #e7dcc6;font-size:.9rem}

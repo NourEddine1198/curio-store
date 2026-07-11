@@ -1,19 +1,12 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { ALL_STATUSES, stockMove } from "@/lib/order-status";
 
 // Admin key — MUST be set in environment. No default = no access.
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
-// Valid status transitions
-const VALID_STATUSES = [
-  "PENDING",
-  "CONFIRMED",
-  "CANCELLED",
-  "PROCESSING",
-  "SHIPPED",
-  "DELIVERED",
-  "RETURNED",
-];
+// The admin can set any status (the agent console is more restricted).
+const VALID_STATUSES: readonly string[] = ALL_STATUSES;
 
 // ─── GET /api/orders/[orderNumber] — Order summary ───────
 // PUBLIC but SAFE: returns only non-identifying fields (order number, status,
@@ -151,16 +144,18 @@ export async function PATCH(
       }
 
       // Stock is decremented on order creation now, not on confirmation.
-
-      // CANCELLED → restore stock (from any previous status, since stock was taken at order creation)
-      if (status === "CANCELLED" && existing.status !== "CANCELLED") {
+      // Shared family rule (same as the agent console): entering
+      // CANCELLED/EXPIRED/WRONG/DUPLICATE restores stock once; leaving
+      // that family takes it again. Prevents double-restocks.
+      const move = stockMove(existing.status, status);
+      if (move) {
         const items = await db.orderItem.findMany({
           where: { orderId: existing.id },
         });
         for (const item of items) {
           await db.product.update({
             where: { id: item.productId },
-            data: { stock: { increment: item.quantity } },
+            data: { stock: move === "restore" ? { increment: item.quantity } : { decrement: item.quantity } },
           });
         }
       }
@@ -176,6 +171,13 @@ export async function PATCH(
       where: { orderNumber: num },
       data: updateData,
     });
+
+    // Audit trail for the agent console's timeline
+    if (updateData.status && updateData.status !== existing.status) {
+      await db.orderEvent.create({
+        data: { orderId: existing.id, kind: "status", status: String(updateData.status), actor: "owner" },
+      });
+    }
 
     const updated = await db.order.findUnique({
       where: { orderNumber: num },

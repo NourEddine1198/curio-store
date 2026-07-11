@@ -36,6 +36,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     updateData.webhookPayload = result.rawResponse as never;
 
     await db.order.update({ where: { orderNumber: num }, data: updateData });
+    const agentRow = await db.agent.findUnique({ where: { id: agent.id }, select: { name: true } });
+    await db.orderEvent.create({
+      data: {
+        orderId: order.id, kind: "status", status: "SHIPPED", actor: agentRow?.name || "agent",
+        note: result.trackingCode ? `إيكوتراك — ${result.trackingCode}` : "إيكوتراك",
+      },
+    });
 
     const updated = await db.order.findUnique({
       where: { orderNumber: num },

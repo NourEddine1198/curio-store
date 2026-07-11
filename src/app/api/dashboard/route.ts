@@ -118,11 +118,14 @@ export async function GET(request: NextRequest) {
     for (const o of orders) {
       let stage: Stage | null = null;
 
-      // 1) DB-primary for terminal states.
+      // 1) DB-primary for terminal states (+ the v2 junk family).
       switch (o.status) {
         case "DELIVERED": stage = "delivered"; break;
         case "RETURNED": stage = "returned"; break;
-        case "CANCELLED": stage = "cancelled"; break;
+        case "CANCELLED":
+        case "EXPIRED":
+        case "WRONG":
+        case "DUPLICATE": stage = "cancelled"; break;
       }
 
       // 2) Live Ecotrack enrichment — only for orders still in flight.
@@ -155,10 +158,16 @@ export async function GET(request: NextRequest) {
       // 3) Fall back to the in-flight DB status.
       if (!stage) {
         switch (o.status) {
-          case "PENDING": stage = "pending"; break;
+          case "PENDING":
+          case "NO_ANSWER":
+          case "CALLBACK": stage = "pending"; break;
           case "CONFIRMED":
           case "PROCESSING": stage = "confirmed"; break;
-          case "SHIPPED": stage = "in_transit"; break;
+          case "SHIPPED":
+          case "OUT_FOR_DELIVERY":
+          case "AT_STOPDESK":
+          case "DELIVERY_FAILED":
+          case "IN_RETURN": stage = "in_transit"; break;
           default: stage = "pending";
         }
       }

@@ -60,7 +60,9 @@ model Order {
   disposition     String?                   // confirmed | no_answer | postponed | cancelled | wrong_number | duplicate
   callAttempts    Int         @default(0)   // how many times the agent called
   lastCallAt      DateTime?
-  nextCallAt      DateTime?                  // when to try again (retry scheduling)
+  nextCallAt      DateTime?                  // when to try again (retry scheduling / callback date)
+  callbackNote    String?                    // what the client asked ("call me after 6pm")
+  cancelReason    String?                    // why it was cancelled (from the reasons list or free text)
 
   shippedAt       DateTime?
   trackingCode    String?                   // Shipping company tracking
@@ -81,6 +83,7 @@ model Order {
   updatedAt       DateTime    @updatedAt
 
   items           OrderItem[]
+  events          OrderEvent[]
 
   @@index([status])
   @@index([customerPhone])
@@ -88,6 +91,27 @@ model Order {
   @@index([ip])
   @@index([assignedAgentId])
   @@index([nextCallAt])
+}
+
+// ─── Order timeline (the console's memory) ──────────────────
+// One append-only row per thing that happens to an order:
+//   kind = "status"  → a status change (status = the new one)
+//   kind = "attempt" → one phone-call attempt
+//   kind = "comment" → a note by the agent/owner
+//   kind = "courier" → delivery info pulled from Ecotrack
+//   kind = "system"  → automatic actions (auto-expire, edits, ...)
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind      String   @default("status")
+  status    String?                       // new status when kind = "status"
+  note      String?  @db.Text             // comment text / attempt note / courier detail
+  actor     String                        // agent name | "system" | "ecotrack"
+  createdAt DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([kind, createdAt])
 }
 
 // ─── Confirmation agents (in-house team, replaces OrderDZ) ──
@@ -178,11 +202,22 @@ model SiteSetting {
 enum OrderStatus {
   PENDING          // Just placed
   CONFIRMED        // Confirmation agent said yes
-  CANCELLED        // Customer cancelled or unreachable
-  PROCESSING       // Being packed
-  SHIPPED          // Handed to delivery company
-  DELIVERED        // Customer received
-  RETURNED         // Came back
+  CANCELLED        // Customer cancelled
+  PROCESSING       // (legacy) being packed — treated like CONFIRMED
+  SHIPPED          // Sent to Ecotrack (parcel created / in transit)
+  DELIVERED        // Customer received (terminal)
+  RETURNED         // Came back to us (terminal)
+  // ── Confirmation working states (agent console v2) ──
+  NO_ANSWER        // Called, nobody picked up (attempts counted)
+  CALLBACK         // Client asked to be called at a specific time
+  EXPIRED          // Auto: sat in NO_ANSWER 3 days with no new attempt (recoverable)
+  WRONG            // Wrong/fake number — junk, excluded from confirm rate
+  DUPLICATE        // Duplicate of another order — junk
+  // ── Delivery journey states (fed by Ecotrack tracking sync) ──
+  OUT_FOR_DELIVERY // Courier is out with it (home delivery)
+  AT_STOPDESK      // Waiting at the stop-desk for pickup
+  DELIVERY_FAILED  // Courier couldn't deliver — agent should call (rescue!)
+  IN_RETURN        // On its way back to us
 }
 
 enum DeliveryType {
