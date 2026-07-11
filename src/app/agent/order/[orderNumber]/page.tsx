@@ -76,11 +76,16 @@ export default function AgentOrder() {
   useEffect(() => {
     if (!token) return;
     load(token);
-    // catalog prices + wilaya/commune options
-    fetch("/api/products").then((r) => r.json()).then((ps: { slug: string; price: number }[]) => {
-      setPriceMap((prev) => { const m = { ...prev }; ps.forEach((p) => (m[p.slug] = p.price)); return m; });
-    }).catch(() => {});
-    fetch("/api/delivery").then((r) => r.json()).then((d) => setWilayas(d.wilayas || [])).catch(() => {});
+    // catalog prices + wilaya/commune options — retry (no-store) so a slow/dropped
+    // request at open doesn't leave the editor without delivery data.
+    const getJSON = (u: string, n: number): Promise<unknown> =>
+      fetch(u, { cache: "no-store" }).then((r) => { if (!r.ok) throw 0; return r.json(); })
+        .catch(() => (n > 0 ? new Promise((z) => setTimeout(z, 700)).then(() => getJSON(u, n - 1)) : null));
+    getJSON("/api/products", 4).then((ps) => {
+      if (!Array.isArray(ps)) return;
+      setPriceMap((prev) => { const m = { ...prev }; (ps as { slug: string; price: number }[]).forEach((p) => (m[p.slug] = p.price)); return m; });
+    });
+    getJSON("/api/delivery", 4).then((d) => { if (d && (d as { wilayas?: unknown[] }).wilayas) setWilayas((d as { wilayas: Wilaya[] }).wilayas); });
   }, [token, load]);
 
   const wilaya = useMemo(() => wilayas.find((w) => String(w.code) === String(f.wilayaCode)), [wilayas, f.wilayaCode]);
@@ -159,6 +164,14 @@ export default function AgentOrder() {
   const status = (order?.status as string) || "";
   const canShip = status === "CONFIRMED" || status === "PROCESSING";
 
+  // Stored (saved) totals from the order itself — shown instantly, no fetch needed.
+  const oSub = order ? Number(order.subtotal) || 0 : 0;
+  const oShip = order ? Number(order.deliveryPrice) || 0 : 0;
+  const oTotal = order ? Number(order.total) || 0 : 0;
+  const deliveryReady = wilayas.length > 0;                // wilaya/commune data loaded?
+  // Show a "new total" line only when an edit actually changes the money.
+  const editedTotal = deliveryReady && order != null && (preview.total !== oTotal || preview.fee !== oShip);
+
   return (
     <div className="ao-wrap">
       <a className="ao-back" href="/agent">← الطلبات</a>
@@ -223,8 +236,20 @@ export default function AgentOrder() {
           </section>
 
           <div className="ao-total">
-            <span>المنتجات {DA(preview.sub)} + التوصيل {preview.fee == null ? "—" : DA(preview.fee)}</span>
-            <b>المجموع: {DA(preview.total)}</b>
+            <div className="ao-total-cur">
+              <span>المنتجات {DA(oSub)} + التوصيل {DA(oShip)}</span>
+              <b>الإجمالي: {DA(oTotal)}</b>
+            </div>
+            {!deliveryReady && (
+              <div className="ao-total-hint">⏳ جاري تحميل بيانات التوصيل… (باش تقدر تبدّل الولاية/نوع التوصيل)</div>
+            )}
+            {editedTotal && (
+              <div className="ao-total-new">
+                <span>بعد التعديل: منتجات {DA(preview.sub)} + توصيل {preview.fee == null ? "—" : DA(preview.fee)}</span>
+                <b>= {DA(preview.total)}</b>
+                <em>اضغط «احفظ» باش يتسجّل</em>
+              </div>
+            )}
           </div>
 
           <button className="ao-save" disabled={busy} onClick={saveEdit}>{busy ? "…" : "💾 احفظ التبديلات"}</button>
@@ -278,8 +303,13 @@ const styles = `
   .ao-qty button{width:34px;height:34px;border:2px solid #161310;border-radius:8px;background:#fff;font-size:1.1rem;cursor:pointer}
   .ao-qty .ao-x{width:auto;padding:0 10px;font-size:.8rem;font-weight:800;background:#f3ece0}
   .ao-add{margin-top:10px;border:1.5px dashed #161310;border-radius:9px;padding:9px;width:100%;background:#fff;font-family:inherit}
-  .ao-total{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:12px 14px;border:2px dashed #161310;border-radius:12px;margin-bottom:12px;font-weight:700}
-  .ao-total b{font-size:1.15rem}
+  .ao-total{padding:12px 14px;border:2px dashed #161310;border-radius:12px;margin-bottom:12px;font-weight:700}
+  .ao-total-cur{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .ao-total-cur b{font-size:1.2rem}
+  .ao-total-hint{margin-top:8px;font-size:.82rem;color:#8a5a00;background:#fff6d6;border-radius:8px;padding:6px 10px;font-weight:700}
+  .ao-total-new{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-top:10px;padding-top:10px;border-top:1px dashed #cbbfa8;color:#2c7a1e}
+  .ao-total-new b{font-size:1.15rem}
+  .ao-total-new em{font-style:normal;font-size:.72rem;color:#675b4c;background:#eaf7e6;border:1px solid #a9d99a;border-radius:6px;padding:2px 7px}
   .ao-save{width:100%;background:#161310;color:#fff;border:2px solid #161310;border-radius:12px;padding:13px;font-weight:800;font-size:1rem;cursor:pointer;margin-bottom:16px}
   .ao-save:disabled{opacity:.5}
   .ao-disp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
