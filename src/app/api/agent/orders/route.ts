@@ -64,18 +64,17 @@ export async function GET(request: NextRequest) {
       take: 50,
     });
     for (const o of toExpire) {
-      const res = await db.order.updateMany({
-        where: { id: o.id, status: "NO_ANSWER" }, // guarded — don't clobber concurrent work
-        data: { status: "EXPIRED" },
-      });
-      if (res.count > 0) {
-        for (const it of o.items) {
-          await db.product.update({ where: { id: it.productId }, data: { stock: { increment: it.quantity } } });
-        }
-        await db.orderEvent.create({
-          data: { orderId: o.id, kind: "system", status: "EXPIRED", actor: "system", note: "انتهى أوتوماتيك: 3 أيام بلا محاولة جديدة" },
-        });
+      // Read-then-update guard (updateMany opens a transaction under the
+      // Neon HTTP driver — not supported). Don't clobber concurrent work.
+      const fresh = await db.order.findUnique({ where: { id: o.id }, select: { status: true } });
+      if (fresh?.status !== "NO_ANSWER") continue;
+      await db.order.update({ where: { id: o.id }, data: { status: "EXPIRED" } });
+      for (const it of o.items) {
+        await db.product.update({ where: { id: it.productId }, data: { stock: { increment: it.quantity } } });
       }
+      await db.orderEvent.create({
+        data: { orderId: o.id, kind: "system", status: "EXPIRED", actor: "system", note: "انتهى أوتوماتيك: 3 أيام بلا محاولة جديدة" },
+      });
     }
 
     // ── Build the shared filter (everything EXCEPT the status tab) ──

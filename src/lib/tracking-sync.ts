@@ -141,27 +141,26 @@ export async function runTrackingSync(): Promise<TrackingSyncReport> {
     if (mapped === "DELIVERED" && !o.deliveredAt) data.deliveredAt = new Date();
     if (mapped === "RETURNED" && !o.returnedAt) data.returnedAt = new Date();
 
-    // guarded — only move if still in an active post-ship status
-    const res = await db.order.updateMany({
-      where: { id: o.id, status: { in: POST_SHIP_ACTIVE as never } },
-      data,
+    // Guard: only move if STILL in an active post-ship status. Read-then-
+    // update (not updateMany — updateMany opens a transaction under the
+    // Neon HTTP driver and dies with "Transactions are not supported").
+    const fresh = await db.order.findUnique({ where: { id: o.id }, select: { status: true } });
+    if (!fresh || !POST_SHIP_ACTIVE.includes(fresh.status as StatusKey)) continue;
+    await db.order.update({ where: { id: o.id }, data });
+    await db.orderEvent.create({
+      data: { orderId: o.id, kind: "status", status: mapped, actor: "ecotrack", note: info.status || undefined },
     });
-    if (res.count > 0) {
-      await db.orderEvent.create({
-        data: { orderId: o.id, kind: "status", status: mapped, actor: "ecotrack", note: info.status || undefined },
-      });
-      report.changed += 1;
-      report.byStatus[mapped] = (report.byStatus[mapped] || 0) + 1;
-      writes += 1;
-    }
+    report.changed += 1;
+    report.byStatus[mapped] = (report.byStatus[mapped] || 0) + 1;
+    writes += 1;
   }
 
-  // remember when we last ran (rate-limits the agent's refresh button)
-  await db.siteSetting.upsert({
-    where: { key: "trackingSyncLastRunAt" },
-    update: { value: ranAt },
-    create: { key: "trackingSyncLastRunAt", value: ranAt },
-  });
+  // remember when we last ran (rate-limits the agent's refresh button).
+  // NOT an upsert — upsert opens a transaction and the Neon HTTP driver
+  // has none ("Transactions are not supported in HTTP mode").
+  const stamp = await db.siteSetting.findUnique({ where: { key: "trackingSyncLastRunAt" } });
+  if (stamp) await db.siteSetting.update({ where: { key: "trackingSyncLastRunAt" }, data: { value: ranAt } });
+  else await db.siteSetting.create({ data: { key: "trackingSyncLastRunAt", value: ranAt } });
 
   return report;
 }
