@@ -358,6 +358,20 @@ export async function POST(request: NextRequest) {
       subtotal += product.price * qty;
     }
 
+    // --- Bundle pricing: a Roubla + Dlala pair costs 3,800, not 4,380 ---
+    // The product pages' upsell adds the two games as separate items; this
+    // applies the promised pair price server-side (580 off per matched pair).
+    // The homepage pack uses the dedicated roubla-dlala-pack product with its
+    // own 3,800 price, so it is unaffected.
+    const BUNDLE_PAIR_OFF = 580;
+    const slugQty = (slug: string) =>
+      orderItems.reduce((n, it) => {
+        const p = productById.get(it.productId);
+        return p?.slug === slug ? n + it.quantity : n;
+      }, 0);
+    const bundlePairs = Math.min(slugQty("roubla"), slugQty("dlala"));
+    const bundleDiscount = bundlePairs * BUNDLE_PAIR_OFF;
+
     // --- Coupon validation ---
     let discountAmount = 0;
     if (couponCode && typeof couponCode === "string") {
@@ -372,7 +386,7 @@ export async function POST(request: NextRequest) {
       discountAmount = couponResult.discount;
     }
 
-    const total = subtotal - discountAmount + deliveryPrice;
+    const total = subtotal - bundleDiscount - discountAmount + deliveryPrice;
 
     // Build notes with coupon info
     let orderNotes = notes || null;
@@ -381,6 +395,10 @@ export async function POST(request: NextRequest) {
         ? `كود التخفيض: ${couponCode} (-${discountAmount} دج)`
         : `كود التخفيض: ${couponCode}`;
       orderNotes = couponInfo + (notes ? " | " + notes : "");
+    }
+    if (bundleDiscount > 0) {
+      const bundleInfo = `باك روبلة+دلالة: -${bundleDiscount} دج`;
+      orderNotes = orderNotes ? orderNotes + " | " + bundleInfo : bundleInfo;
     }
 
     // Append waitlist flag if any product was out of stock
