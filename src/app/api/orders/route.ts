@@ -34,6 +34,15 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
       ? new Date(process.env.COUPON_INSTAGRAM_EXPIRES)
       : null,                             // null = no expiry (set env var to enable)
   },
+  // The printed gift card («هدية ليك» hang-tag): its QR opens /gift on the
+  // frontend, which forwards to /roubla/?gift=HADIA400, and the page sends
+  // this code with the order. Printed cards sit in drawers for months, so
+  // no expiry — to kill or change the offer, edit this entry and redeploy.
+  HADIA400: {
+    discountAmount: 400,                  // 2390 → 1990 on Roubla
+    applicableSlugs: ["roubla"],
+    expiresAt: null,
+  },
 };
 
 function validateCoupon(
@@ -51,7 +60,7 @@ function validateCoupon(
     coupon.applicableSlugs.includes(s)
   );
   if (!hasApplicable) {
-    return { valid: false, error: "هذا الكود يخدم غير مع الباك" };
+    return { valid: false, error: "هذا الكود ما يخدمش مع المنتجات لي في السلة" };
   }
   return { valid: true, discount: coupon.discountAmount };
 }
