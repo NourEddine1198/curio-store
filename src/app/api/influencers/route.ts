@@ -80,7 +80,13 @@ export async function POST(request: NextRequest) {
   const customerDiscount = toNonNegativeInt(body.customerDiscount);
   const commissionRate = toNonNegativeInt(body.commissionRate);
   const fixedFee = toNonNegativeInt(body.fixedFee);
-  if (customerDiscount === null || commissionRate === null || fixedFee === null) {
+  const maxUses = toNonNegativeInt(body.maxUses);
+  if (
+    customerDiscount === null ||
+    commissionRate === null ||
+    fixedFee === null ||
+    maxUses === null
+  ) {
     return badRequest("المبالغ لازم تكون أرقام موجبة");
   }
 
@@ -110,6 +116,7 @@ export async function POST(request: NextRequest) {
       couponCode,
       customerDiscount,
       applicableSlugs,
+      maxUses,
       commissionRate,
       commissionBasis,
       countTrigger,

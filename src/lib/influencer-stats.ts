@@ -78,6 +78,26 @@ export interface InfluencerStats {
   lastOrderAt: Date | null;
 }
 
+// ─── Usage cap (maxUses) ────────────────────────────────────
+// A code with maxUses > 0 stops working once this many LIVE orders carry it
+// ("first 150 copies" launch offers). Junk (wrong/duplicate) and dead
+// (cancelled/expired) orders don't burn a slot — a cancelled order frees
+// its copy, exactly like stock.
+import { OrderStatus } from "@/generated/prisma/client";
+
+const CAP_EXCLUDED: OrderStatus[] = [
+  OrderStatus.WRONG,
+  OrderStatus.DUPLICATE,
+  OrderStatus.CANCELLED,
+  OrderStatus.EXPIRED,
+];
+
+export async function countCapUses(couponCode: string): Promise<number> {
+  return db.order.count({
+    where: { couponCode, status: { notIn: CAP_EXCLUDED } },
+  });
+}
+
 function isConfirmed(o: { status: string; confirmedAt: Date | null }): boolean {
   return o.confirmedAt !== null || CONFIRMED_STATUSES.has(o.status);
 }

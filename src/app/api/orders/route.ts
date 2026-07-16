@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendToOrderDZ } from "@/lib/orderdz";
 import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
+import { countCapUses } from "@/lib/influencer-stats";
 
 // ─── Validation helpers ──────────────────────────────────
 
@@ -76,6 +77,19 @@ async function validateCoupon(
     !productSlugs.some((s) => influencer.applicableSlugs.includes(s))
   ) {
     return { valid: false, error: "هذا الكود ما يخدمش مع المنتجات لي في السلة" };
+  }
+  // Capped codes ("first 150 copies" launch offers): once the live-order
+  // count hits maxUses the code politely stops — server-enforced, so the
+  // cap holds even if a page still shows the offer.
+  if (influencer.maxUses > 0) {
+    const used = await countCapUses(influencer.couponCode);
+    if (used >= influencer.maxUses) {
+      return {
+        valid: false,
+        error:
+          "😅 العرض الخاص كمّل — النسخ لي كانو بالتخفيض تحجزو قاع! تقدر تكمّل الطلب بالسعر العادي، وشكراً على ثقتك في كيوريو ❤️",
+      };
+    }
   }
   return { valid: true, discount: influencer.customerDiscount };
 }

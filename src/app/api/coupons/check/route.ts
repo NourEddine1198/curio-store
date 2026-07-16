@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { countCapUses } from "@/lib/influencer-stats";
 
 // PUBLIC, read-only: the checkout asks "is this code valid for this cart,
 // and how much does it take off?" so the page can show the discount before
@@ -40,7 +41,12 @@ export async function POST(request: NextRequest) {
 
   const influencer = await db.influencer.findUnique({
     where: { couponCode: code },
-    select: { active: true, customerDiscount: true, applicableSlugs: true },
+    select: {
+      active: true,
+      customerDiscount: true,
+      applicableSlugs: true,
+      maxUses: true,
+    },
   });
   if (!influencer || !influencer.active) {
     return NextResponse.json({ valid: false });
@@ -51,6 +57,20 @@ export async function POST(request: NextRequest) {
     !slugs.some((s) => influencer.applicableSlugs.includes(s))
   ) {
     return NextResponse.json({ valid: false, reason: "products" });
+  }
+  // Capped codes: report exhaustion (reason "exhausted") so pages can show
+  // a friendly "offer finished" instead of the discount; while alive, also
+  // expose how many are left so pages can show real scarcity.
+  if (influencer.maxUses > 0) {
+    const used = await countCapUses(code);
+    if (used >= influencer.maxUses) {
+      return NextResponse.json({ valid: false, reason: "exhausted" });
+    }
+    return NextResponse.json({
+      valid: true,
+      discount: influencer.customerDiscount,
+      remaining: influencer.maxUses - used,
+    });
   }
   return NextResponse.json({
     valid: true,

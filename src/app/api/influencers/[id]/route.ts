@@ -60,6 +60,7 @@ export async function PATCH(
     "customerDiscount",
     "commissionRate",
     "fixedFee",
+    "maxUses",
   ] as const) {
     if (body[field] !== undefined) {
       const n = toNonNegativeInt(body[field]);

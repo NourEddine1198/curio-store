@@ -46,6 +46,7 @@ interface Influencer {
   active: boolean;
   customerDiscount: number;
   applicableSlugs: string[];
+  maxUses: number;
   commissionRate: number;
   commissionBasis: string;
   countTrigger: string;
@@ -93,6 +94,7 @@ const EMPTY_FORM = {
   phone: "",
   couponCode: "",
   customerDiscount: "200",
+  maxUses: "0",
   commissionRate: "0",
   commissionBasis: "ORDER",
   countTrigger: "CONFIRMED",
@@ -216,6 +218,7 @@ export default function InfluencersPage() {
       phone: inf.phone ?? "",
       couponCode: inf.couponCode,
       customerDiscount: String(inf.customerDiscount),
+      maxUses: String(inf.maxUses ?? 0),
       commissionRate: String(inf.commissionRate),
       commissionBasis: inf.commissionBasis,
       countTrigger: inf.countTrigger,
@@ -237,6 +240,7 @@ export default function InfluencersPage() {
         phone: form.phone,
         couponCode: form.couponCode,
         customerDiscount: form.customerDiscount,
+        maxUses: form.maxUses,
         commissionRate: form.commissionRate,
         commissionBasis: form.commissionBasis,
         countTrigger: form.countTrigger,
@@ -477,6 +481,19 @@ export default function InfluencersPage() {
                       {r.customerDiscount > 0 && (
                         <span className="iw-sub">−{fmt(r.customerDiscount)} DA for customer</span>
                       )}
+                      {r.maxUses > 0 && (
+                        <span
+                          className={
+                            "iw-sub " +
+                            (r.stats.placed - r.stats.cancelled >= r.maxUses
+                              ? "iw-bad"
+                              : "iw-good")
+                          }
+                        >
+                          used {fmt(r.stats.placed - r.stats.cancelled)} / {fmt(r.maxUses)}
+                          {r.stats.placed - r.stats.cancelled >= r.maxUses && " · FULL"}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <span className="iw-sub">
@@ -574,6 +591,11 @@ export default function InfluencersPage() {
                 Customer gets (DA off) <span className="iw-hint">what the code gives the buyer</span>
                 <input className="iw-input" type="number" min={0} value={form.customerDiscount}
                   onChange={(e) => setForm({ ...form, customerDiscount: e.target.value })} />
+              </label>
+              <label>
+                Usage cap <span className="iw-hint">code dies after N live orders — 0 = unlimited</span>
+                <input className="iw-input" type="number" min={0} value={form.maxUses}
+                  onChange={(e) => setForm({ ...form, maxUses: e.target.value })} />
               </label>
               <label>
                 Commission (DA) <span className="iw-hint">what THEY earn per counted order/game</span>

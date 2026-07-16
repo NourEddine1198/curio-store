@@ -117,6 +117,7 @@ model Influencer {
 
   customerDiscount Int      @default(0)         // DA off for the customer
   applicableSlugs  String[] @default([])        // empty = valid on all products
+  maxUses          Int      @default(0)         // stop accepting after N live orders (0 = unlimited) — launch/scarcity offers
 
   commissionRate   Int      @default(0)         // DA per counted order/unit
   commissionBasis  String   @default("ORDER")   // ORDER | UNIT (per game in the order)
