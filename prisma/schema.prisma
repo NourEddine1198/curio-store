@@ -77,6 +77,10 @@ model Order {
   // Security / anti-abuse
   ip              String?                   // Client IP for rate limiting
 
+  // Coupon / influencer attribution (structured — notes keep the human-readable copy)
+  couponCode      String?                   // normalized UPPERCASE code used at checkout
+  couponDiscount  Int         @default(0)   // DA taken off by that code
+
   notes           String?     @db.Text      // Internal notes
 
   createdAt       DateTime    @default(now())
@@ -91,6 +95,53 @@ model Order {
   @@index([ip])
   @@index([assignedAgentId])
   @@index([nextCallAt])
+  @@index([couponCode])
+}
+
+// ─── Influencer program ─────────────────────────────────────
+// One row per influencer. Their personal coupon code attributes orders;
+// every money term is per-influencer because every deal is negotiated:
+//   customerDiscount — what the code gives the buyer (DA off)
+//   commissionRate + commissionBasis — what THEY earn per counted order/unit
+//   countTrigger — which orders are payable: PLACED (junk excluded) or CONFIRMED
+//   fixedFee — flat amount for fixed-rate (or hybrid) deals
+// shareToken powers their private read-only results page (/i/<token>).
+model Influencer {
+  id               String   @id @default(cuid())
+  name             String
+  handle           String?                      // @username
+  platform         String?                      // instagram | tiktok | ...
+  phone            String?
+  couponCode       String   @unique             // stored UPPERCASE
+  active           Boolean  @default(true)
+
+  customerDiscount Int      @default(0)         // DA off for the customer
+  applicableSlugs  String[] @default([])        // empty = valid on all products
+
+  commissionRate   Int      @default(0)         // DA per counted order/unit
+  commissionBasis  String   @default("ORDER")   // ORDER | UNIT (per game in the order)
+  countTrigger     String   @default("CONFIRMED") // CONFIRMED | PLACED
+  fixedFee         Int      @default(0)         // flat deal amount (0 = none)
+
+  shareToken       String   @unique @default(cuid())
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payments         InfluencerPayment[]
+}
+
+// Append-only payout log — "paid Sara 6,000 DA on Aug 3".
+// The window computes owed vs paid from commission math minus these rows.
+model InfluencerPayment {
+  id           String     @id @default(cuid())
+  influencerId String
+  influencer   Influencer @relation(fields: [influencerId], references: [id], onDelete: Cascade)
+  amount       Int                              // DA
+  note         String?
+  paidAt       DateTime   @default(now())
+
+  @@index([influencerId, paidAt])
 }
 
 // ─── Order timeline (the console's memory) ──────────────────

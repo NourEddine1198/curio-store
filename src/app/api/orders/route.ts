@@ -45,24 +45,39 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
   },
 };
 
-function validateCoupon(
+async function validateCoupon(
   code: string,
   productSlugs: string[]
-): { valid: true; discount: number } | { valid: false; error: string } {
+): Promise<{ valid: true; discount: number } | { valid: false; error: string }> {
   const coupon = ACTIVE_COUPONS[code];
-  if (!coupon) {
+  if (coupon) {
+    if (coupon.expiresAt && new Date() > coupon.expiresAt) {
+      return { valid: false, error: "كود التخفيض منتهي الصلاحية" };
+    }
+    const hasApplicable = productSlugs.some((s) =>
+      coupon.applicableSlugs.includes(s)
+    );
+    if (!hasApplicable) {
+      return { valid: false, error: "هذا الكود ما يخدمش مع المنتجات لي في السلة" };
+    }
+    return { valid: true, discount: coupon.discountAmount };
+  }
+
+  // Influencer codes live in the DB (managed from /influencers — no redeploys).
+  // A 0-discount code is valid: it still attributes the order to the influencer.
+  const influencer = await db.influencer.findUnique({
+    where: { couponCode: code },
+  });
+  if (!influencer || !influencer.active) {
     return { valid: false, error: "كود التخفيض غير صالح" };
   }
-  if (coupon.expiresAt && new Date() > coupon.expiresAt) {
-    return { valid: false, error: "كود التخفيض منتهي الصلاحية" };
-  }
-  const hasApplicable = productSlugs.some((s) =>
-    coupon.applicableSlugs.includes(s)
-  );
-  if (!hasApplicable) {
+  if (
+    influencer.applicableSlugs.length > 0 &&
+    !productSlugs.some((s) => influencer.applicableSlugs.includes(s))
+  ) {
     return { valid: false, error: "هذا الكود ما يخدمش مع المنتجات لي في السلة" };
   }
-  return { valid: true, discount: coupon.discountAmount };
+  return { valid: true, discount: influencer.customerDiscount };
 }
 
 function badRequest(message: string) {
@@ -372,14 +387,13 @@ export async function POST(request: NextRequest) {
     const bundlePairs = Math.min(slugQty("roubla"), slugQty("dlala"));
     const bundleDiscount = bundlePairs * BUNDLE_PAIR_OFF;
 
-    // --- Coupon validation ---
+    // --- Coupon validation (hardcoded legacy codes + DB influencer codes) ---
     let discountAmount = 0;
-    if (couponCode && typeof couponCode === "string") {
+    let normalizedCoupon: string | null = null;
+    if (couponCode && typeof couponCode === "string" && couponCode.trim()) {
       const cartSlugs = products.map((p) => p.slug);
-      const couponResult = validateCoupon(
-        couponCode.trim().toUpperCase(),
-        cartSlugs
-      );
+      normalizedCoupon = couponCode.trim().toUpperCase();
+      const couponResult = await validateCoupon(normalizedCoupon, cartSlugs);
       if (!couponResult.valid) {
         return badRequest(couponResult.error);
       }
@@ -423,6 +437,8 @@ export async function POST(request: NextRequest) {
         deliveryPrice,
         subtotal,
         total,
+        couponCode: normalizedCoupon,
+        couponDiscount: discountAmount,
         ip: clientIp !== "unknown" ? clientIp : null,
         notes: orderNotes,
       },
