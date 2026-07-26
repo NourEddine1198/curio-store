@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
     const funnel = {
       total: statusRows.reduce((s, r) => s + r._count._all, 0),
       pending: c("PENDING"),
+      waitlist: c("WAITLIST"),
       working: c("NO_ANSWER") + c("CALLBACK"),
       confirmed: c("CONFIRMED") + c("PROCESSING"),
       shipped: c("SHIPPED") + c("OUT_FOR_DELIVERY") + c("AT_STOPDESK") + c("DELIVERY_FAILED") + c("IN_RETURN"),

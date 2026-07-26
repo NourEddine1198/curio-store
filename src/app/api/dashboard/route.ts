@@ -126,6 +126,11 @@ export async function GET(request: NextRequest) {
         case "EXPIRED":
         case "WRONG":
         case "DUPLICATE": stage = "cancelled"; break;
+        // A waitlisted order has no parcel and never will until someone calls
+        // it. Resolve it here rather than letting step 2 phone-match it: these
+        // are months old, so a customer's earlier delivered parcel can fall
+        // inside the 60-day window and mislabel them as "delivered".
+        case "WAITLIST": stage = "pending"; break;
       }
 
       // 2) Live Ecotrack enrichment — only for orders still in flight.

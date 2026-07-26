@@ -7,6 +7,7 @@
 
 export const ALL_STATUSES = [
   "PENDING",
+  "WAITLIST",
   "NO_ANSWER",
   "CALLBACK",
   "CONFIRMED",
@@ -31,6 +32,7 @@ export type StatusKey = (typeof ALL_STATUSES)[number];
 // statuses come only from the Ecotrack tracking sync.
 export const AGENT_SET_STATUSES: StatusKey[] = [
   "PENDING",
+  "WAITLIST",
   "NO_ANSWER",
   "CALLBACK",
   "CONFIRMED",
@@ -66,7 +68,12 @@ export const POST_SHIP_ACTIVE: StatusKey[] = [
 // stock once; leaving it takes stock again. (RETURNED is NOT here:
 // the physical unit comes back days later — owner adjusts stock
 // in the admin when the parcel physically arrives.)
-export const RESTOCK_FAMILY: StatusKey[] = ["CANCELLED", "EXPIRED", "WRONG", "DUPLICATE"];
+// WAITLIST is here on purpose: a waitlisted order is NOT holding a unit for
+// anyone — we never had the stock. Parking an order releases its claim, and
+// the moment the agent confirms it the unit is taken again. That makes
+// "stock = what's physically on the shelf" true, and means confirming a
+// waitlist order automatically draws one down without anyone remembering to.
+export const RESTOCK_FAMILY: StatusKey[] = ["WAITLIST", "CANCELLED", "EXPIRED", "WRONG", "DUPLICATE"];
 
 export function stockMove(oldStatus: string, newStatus: string): "restore" | "take" | null {
   const wasOut = RESTOCK_FAMILY.includes(oldStatus as StatusKey);
@@ -99,6 +106,7 @@ export const SHIP_RANK: Record<string, number> = {
 // ── Display (Arabic labels + tab colors, no emojis — Windows) ──
 export const STATUS_META: Record<StatusKey, { ar: string; color: string; text?: string }> = {
   PENDING: { ar: "جديد", color: "#eab308" },
+  WAITLIST: { ar: "مستني السلعة", color: "#0f766e" },
   NO_ANSWER: { ar: "ما جاوبش", color: "#f97316" },
   CALLBACK: { ar: "معاودة", color: "#8b5cf6" },
   CONFIRMED: { ar: "مأكد", color: "#22c55e" },
@@ -120,6 +128,7 @@ export const STATUS_META: Record<StatusKey, { ar: string; color: string; text?: 
 // PROCESSING is legacy — folded into the CONFIRMED tab, not shown.
 export const TAB_ORDER: StatusKey[] = [
   "PENDING",
+  "WAITLIST",
   "NO_ANSWER",
   "CALLBACK",
   "CONFIRMED",

@@ -253,6 +253,7 @@ model SiteSetting {
 // ─── Enums ──────────────────────────────────────────────────
 enum OrderStatus {
   PENDING          // Just placed
+  WAITLIST         // Ordered something we had no stock for — park until it arrives, then call
   CONFIRMED        // Confirmation agent said yes
   CANCELLED        // Customer cancelled
   PROCESSING       // (legacy) being packed — treated like CONFIRMED
