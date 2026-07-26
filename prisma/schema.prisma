@@ -30,6 +30,11 @@ model Order {
   id              String      @id @default(cuid())
   orderNumber     Int         @unique @default(autoincrement())
   status          OrderStatus @default(PENDING)
+  // The status an order held before it was archived as HANDLED. The console
+  // shows one flat "handled" label for the pre-waitlist era, but the owner
+  // dashboard still reads the real outcome from here, so archiving does not
+  // erase delivered/returned revenue. Null for everything else.
+  preHandledStatus OrderStatus?
 
   // Customer info
   customerName    String
@@ -254,6 +259,7 @@ model SiteSetting {
 enum OrderStatus {
   PENDING          // Just placed
   WAITLIST         // Ordered something we had no stock for — park until it arrives, then call
+  HANDLED          // Pre-waitlist era (<= #557): dealt with outside this system. Archive label only.
   CONFIRMED        // Confirmation agent said yes
   CANCELLED        // Customer cancelled
   PROCESSING       // (legacy) being packed — treated like CONFIRMED

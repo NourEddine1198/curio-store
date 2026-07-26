@@ -51,6 +51,7 @@ type Stage =
 interface OrderRow {
   orderNumber: number;
   status: string;
+  preHandledStatus: string | null;
   subtotal: number;
   createdAt: Date;
   customerPhone: string;
@@ -74,6 +75,7 @@ export async function GET(request: NextRequest) {
         select: {
           orderNumber: true,
           status: true,
+          preHandledStatus: true,
           subtotal: true,
           createdAt: true,
           customerPhone: true,
@@ -119,7 +121,12 @@ export async function GET(request: NextRequest) {
       let stage: Stage | null = null;
 
       // 1) DB-primary for terminal states (+ the v2 junk family).
-      switch (o.status) {
+      // HANDLED is an archive label put on the whole pre-waitlist era, so it
+      // says nothing about the outcome — read through it to the status the
+      // order actually held, or the delivered/returned revenue would vanish
+      // from this dashboard the moment we archived it.
+      const trueStatus = o.status === "HANDLED" ? (o.preHandledStatus ?? "PENDING") : o.status;
+      switch (trueStatus) {
         case "DELIVERED": stage = "delivered"; break;
         case "RETURNED": stage = "returned"; break;
         case "CANCELLED":
@@ -162,7 +169,7 @@ export async function GET(request: NextRequest) {
 
       // 3) Fall back to the in-flight DB status.
       if (!stage) {
-        switch (o.status) {
+        switch (trueStatus) {
           case "PENDING":
           case "NO_ANSWER":
           case "CALLBACK": stage = "pending"; break;

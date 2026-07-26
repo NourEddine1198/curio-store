@@ -8,6 +8,7 @@
 export const ALL_STATUSES = [
   "PENDING",
   "WAITLIST",
+  "HANDLED",
   "NO_ANSWER",
   "CALLBACK",
   "CONFIRMED",
@@ -107,6 +108,7 @@ export const SHIP_RANK: Record<string, number> = {
 export const STATUS_META: Record<StatusKey, { ar: string; color: string; text?: string }> = {
   PENDING: { ar: "جديد", color: "#eab308" },
   WAITLIST: { ar: "مستني السلعة", color: "#0f766e" },
+  HANDLED: { ar: "تسيّرت من قبل", color: "#94a3b8" },
   NO_ANSWER: { ar: "ما جاوبش", color: "#f97316" },
   CALLBACK: { ar: "معاودة", color: "#8b5cf6" },
   CONFIRMED: { ar: "مأكد", color: "#22c55e" },

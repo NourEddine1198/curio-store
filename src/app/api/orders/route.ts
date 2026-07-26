@@ -438,9 +438,14 @@ export async function POST(request: NextRequest) {
       orderNotes = orderNotes ? orderNotes + " | " + waitlistNote : waitlistNote;
     }
 
-    // --- Create order (NO stock decrement — that happens on confirmation) ---
+    // --- Create order ---
+    // If any line is sold out the order opens as WAITLIST, not PENDING. It
+    // used to land in PENDING carrying only a note, which is how ~100 orders
+    // hid among the genuinely new ones for three months before anyone
+    // noticed. WAITLIST gives them their own tab from the moment they arrive.
     const order = await db.order.create({
       data: {
+        status: hasWaitlistItem ? "WAITLIST" : "PENDING",
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         customerPhone2: customerPhone2?.trim() || null,
@@ -473,12 +478,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Decrement stock immediately when order is placed
-    for (const item of orderItems) {
-      await db.product.update({
-        where: { id: item.productId },
-        data: { stock: { decrement: item.quantity } },
-      });
+    // Decrement stock immediately when order is placed — EXCEPT for a
+    // waitlisted order, which by definition is not holding a unit (WAITLIST
+    // is in RESTOCK_FAMILY). Taking stock here as well would double-count:
+    // once now, and again when the agent moves it out of WAITLIST.
+    if (!hasWaitlistItem) {
+      for (const item of orderItems) {
+        await db.product.update({
+          where: { id: item.productId },
+          data: { stock: { decrement: item.quantity } },
+        });
+      }
     }
 
     // --- Auto-send to OrderDZ for confirmation ---
