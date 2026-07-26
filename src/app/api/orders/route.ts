@@ -40,7 +40,7 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
   // this code with the order. Printed cards sit in drawers for months, so
   // no expiry — to kill or change the offer, edit this entry and redeploy.
   HADIA400: {
-    discountAmount: 400,                  // 2390 → 1990 on Roubla
+    discountAmount: 400,                  // 2400 → 2000 on Roubla
     applicableSlugs: ["roubla"],
     expiresAt: null,
   },
@@ -387,12 +387,15 @@ export async function POST(request: NextRequest) {
       subtotal += product.price * qty;
     }
 
-    // --- Bundle pricing: a Roubla + Dlala pair costs 3,800, not 4,380 ---
+    // --- Bundle pricing: a Roubla + Dlala pair costs 3,800, not 4,600 ---
     // The product pages' upsell adds the two games as separate items; this
-    // applies the promised pair price server-side (580 off per matched pair).
+    // applies the promised pair price server-side (800 off per matched pair).
     // The homepage pack uses the dedicated roubla-dlala-pack product with its
     // own 3,800 price, so it is unaffected.
-    const BUNDLE_PAIR_OFF = 580;
+    // NOTE: this is a FIXED amount, so it must be re-derived whenever either
+    // game's price moves. 2,400 + 2,200 = 4,600 − 800 = 3,800. (Jul 26 2026:
+    // was 580, back when Roubla was 2,390 and Dlala 1,990.)
+    const BUNDLE_PAIR_OFF = 800;
     const slugQty = (slug: string) =>
       orderItems.reduce((n, it) => {
         const p = productById.get(it.productId);
