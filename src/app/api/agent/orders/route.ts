@@ -79,7 +79,14 @@ export async function GET(request: NextRequest) {
 
     // ── Build the shared filter (everything EXCEPT the status tab) ──
     const AND: Record<string, unknown>[] = [];
-    if (cutoverAt && !isNaN(cutoverAt.getTime())) AND.push({ createdAt: { gte: cutoverAt } });
+    // The cutover hides the pre-console backlog so it can't distort the queue.
+    // WAITLIST is exempt: it is a hand-checked list of people who really are
+    // owed stock (some since April), so it must stay visible however old it
+    // is. Everything else still respects the cutover, and the agent's own
+    // from/to filters below still apply to waitlist rows too.
+    if (cutoverAt && !isNaN(cutoverAt.getTime())) {
+      AND.push({ OR: [{ status: "WAITLIST" }, { createdAt: { gte: cutoverAt } }] });
+    }
     if (wilaya) AND.push({ wilayaCode: wilaya });
     if (deliveryType === "HOME" || deliveryType === "OFFICE") AND.push({ deliveryType });
     if (product) AND.push({ items: { some: { product: { slug: product } } } });

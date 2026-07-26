@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     const weekStart = new Date(todayStart.getTime() - 6 * 24 * 60 * 60 * 1000);
 
     const [agents, statusRows, dispRows, agentStatusRows, agentDispRows,
-      confirmedToday, shippedToday, confirmedWeek, ordersWeek] = await Promise.all([
+      confirmedToday, shippedToday, confirmedWeek, ordersWeek, waitlistParked] = await Promise.all([
       db.agent.findMany({ orderBy: { createdAt: "asc" } }),
       db.order.groupBy({ by: ["status"], where: dateFilter, _count: { _all: true } }),
       db.order.groupBy({ by: ["disposition"], where: dateFilter, _count: { _all: true } }),
@@ -35,6 +35,10 @@ export async function GET(request: NextRequest) {
       db.order.count({ where: { shippedAt: { gte: todayStart } } }),
       db.order.count({ where: { confirmedAt: { gte: weekStart } } }),
       db.order.count({ where: { createdAt: { gte: weekStart } } }),
+      // Waitlist ignores the cutover (most of it predates the console), so it
+      // is counted separately and kept OUT of the funnel — parking an old
+      // order is not agent performance and must not move the confirm rate.
+      db.order.count({ where: { status: "WAITLIST" } }),
     ]);
 
     const countBy = (rows: { _count: { _all: number } }[], key: string, val: string) =>
@@ -47,7 +51,7 @@ export async function GET(request: NextRequest) {
     const funnel = {
       total: statusRows.reduce((s, r) => s + r._count._all, 0),
       pending: c("PENDING"),
-      waitlist: c("WAITLIST"),
+      waitlist: waitlistParked,
       working: c("NO_ANSWER") + c("CALLBACK"),
       confirmed: c("CONFIRMED") + c("PROCESSING"),
       shipped: c("SHIPPED") + c("OUT_FOR_DELIVERY") + c("AT_STOPDESK") + c("DELIVERY_FAILED") + c("IN_RETURN"),
