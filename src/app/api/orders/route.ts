@@ -4,6 +4,7 @@ import { sendToOrderDZ } from "@/lib/orderdz";
 import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
 import { countCapUses } from "@/lib/influencer-stats";
 import { recordCheckoutFailure, pageFromReferer } from "@/lib/checkout-failures";
+import { signUpsellToken } from "@/lib/upsell-token";
 
 // ─── Validation helpers ──────────────────────────────────
 
@@ -613,11 +614,16 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Return success ---
+    // upsellToken lets THIS browser add the paired game to THIS order for the
+    // next half hour (see lib/upsell-token). The product pages now save the
+    // order before showing the cross-sell, so a customer who closes the page
+    // at that moment is still a customer.
     return NextResponse.json(
       {
         success: true,
         orderNumber: order.orderNumber,
         total: order.total,
+        upsellToken: signUpsellToken(order.orderNumber),
         message: "تم تسجيل طلبك بنجاح. راح نتصلو بيك قريبا للتأكيد.",
       },
       { status: 201 }
