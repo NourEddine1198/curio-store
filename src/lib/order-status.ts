@@ -84,6 +84,40 @@ export function stockMove(oldStatus: string, newStatus: string): "restore" | "ta
   return null;
 }
 
+/** Is this order currently holding units off the shelf? */
+export function holdsStock(status: string): boolean {
+  return !RESTOCK_FAMILY.includes(status as StatusKey);
+}
+
+/**
+ * How the shelf must move when an agent edits an order's LINES (quantity
+ * changed, product swapped, line added or removed) — the other half of the
+ * rule above, which only ever covered status changes.
+ *
+ * Without this, editing quietly desynced stock from reality: an order placed
+ * for 2 boxes and edited up to 3 shipped a third box the system still believed
+ * was on the shelf, and editing down never gave the units back.
+ *
+ * An order in the restock family (waitlist/cancelled/…) is holding NOTHING, so
+ * its lines can be edited freely without touching stock — the units are taken
+ * later, by stockMove, if it ever leaves that family.
+ *
+ * Returns productId → signed change in units held. Positive means the order now
+ * holds more, so the shelf must go DOWN by that amount.
+ */
+export function itemStockDelta(
+  status: string,
+  oldItems: { productId: string; quantity: number }[],
+  newItems: { productId: string; quantity: number }[]
+): Record<string, number> {
+  const delta: Record<string, number> = {};
+  if (!holdsStock(status)) return delta;
+  for (const it of oldItems) delta[it.productId] = (delta[it.productId] || 0) - it.quantity;
+  for (const it of newItems) delta[it.productId] = (delta[it.productId] || 0) + it.quantity;
+  for (const id of Object.keys(delta)) if (delta[id] === 0) delete delta[id];
+  return delta;
+}
+
 // ── No-answer / expiry policy (copied from OrderDZ) ──────────
 export const MAX_CALL_ATTEMPTS = 9; // hard cap → EXPIRED
 export const RETRY_INTERVAL_MS = 8 * 60 * 60 * 1000; // suggest next try in ~8h

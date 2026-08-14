@@ -10,6 +10,7 @@ import {
   MAX_CALL_ATTEMPTS,
   RETRY_INTERVAL_MS,
   stockMove,
+  itemStockDelta,
   type StatusKey,
 } from "@/lib/order-status";
 
@@ -258,11 +259,24 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         orderData.commune = null;
       }
 
+      // Move the shelf to match the new lines BEFORE we overwrite them, while
+      // we still know what the order used to hold. Editing used to skip this
+      // entirely, so changing 2 boxes to 3 shipped a box the system still
+      // counted as in stock.
+      const stockDelta = itemStockDelta(existing.status, existing.items, priced.orderItems);
+
       // Replace items, then update the order. The Neon HTTP driver has no
       // transactions, so do it sequentially (edits are rare + agent-driven).
       await db.orderItem.deleteMany({ where: { orderId: existing.id } });
       for (const oi of priced.orderItems) {
         await db.orderItem.create({ data: { orderId: existing.id, productId: oi.productId, quantity: oi.quantity, unitPrice: oi.unitPrice } });
+      }
+      for (const productId of Object.keys(stockDelta)) {
+        const d = stockDelta[productId];
+        await db.product.update({
+          where: { id: productId },
+          data: { stock: d > 0 ? { decrement: d } : { increment: -d } },
+        });
       }
       await db.order.update({ where: { id: existing.id }, data: orderData });
 
