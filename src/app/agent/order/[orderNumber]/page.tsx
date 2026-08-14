@@ -5,14 +5,26 @@
 // reason), read+write the timeline, see the customer's history,
 // then send to Ecotrack.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { STATUS_META, POST_SHIP_STATUSES, MAX_CALL_ATTEMPTS, type StatusKey } from "@/lib/order-status";
 
 const TOKEN_KEY = "curio-agent-token";
 const DA = (n: number) => (n || 0).toLocaleString("en") + " دج";
 
-type Item = { slug: string; quantity: number; name: string };
+// The order stores a 2-digit wilaya code ("09") but /api/delivery hands them
+// back as plain numbers (9). Comparing the two raw made every wilaya from
+// Adrar to Blida look unknown here: empty wilaya box, no communes, and saving
+// failed with "الولاية غير موجودة". Everything on this page pads first.
+const wpad = (c: unknown) => String(c ?? "").padStart(2, "0");
+
+// A total this far under catalog price is more likely a slipped digit than a
+// deal, so it needs an explicit confirmation before it saves.
+const LOW_TOTAL_RATIO = 0.7;
+// How long after her last keystroke an edit saves itself.
+const AUTOSAVE_MS = 1000;
+
+type Item = { slug: string; quantity: number; name: string; unitPrice: number };
 type Wilaya = { code: number; ar: string; home: number | null; stopdesk: number | null; communes: { name: string; desk: boolean }[] };
 type EventRow = { id: string; kind: string; status: string | null; note: string | null; actor: string; createdAt: string };
 type PrevOrder = { orderNumber: number; status: string; total: number; createdAt: string };
@@ -55,6 +67,19 @@ export default function AgentOrder() {
     officeCommune: "", officeName: "", notes: "",
   });
   const [items, setItems] = useState<Item[]>([]);
+  // Money overrides. Kept as strings so typing feels normal (an empty box
+  // while she retypes must not flash "0"). "" means "use the normal price".
+  const [deliveryEdit, setDeliveryEdit] = useState("");
+  const [totalEdit, setTotalEdit] = useState("");
+
+  // ── auto-save plumbing ──
+  // dirty = the agent changed something (as opposed to state being refilled
+  // from a server response, which must never trigger another save).
+  const dirty = useRef(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [lowWarn, setLowWarn] = useState<{ computed: number; catalog: number } | null>(null);
+  const lowOk = useRef(false); // she has clicked past the low-total warning
+  const [overrideDropped, setOverrideDropped] = useState(false);
 
   useEffect(() => { setToken(window.sessionStorage.getItem(TOKEN_KEY) || ""); setReady(true); }, []);
 
@@ -74,10 +99,26 @@ export default function AgentOrder() {
       notes: (o.notes as string) || "",
     });
     const its = (o.items as { quantity: number; unitPrice: number; product: { name: string; slug: string } }[]) || [];
-    setItems(its.map((i) => ({ slug: i.product.slug, quantity: i.quantity, name: i.product.name })));
-    const pm: Record<string, number> = {};
-    its.forEach((i) => (pm[i.product.slug] = i.unitPrice));
-    setPriceMap((prev) => ({ ...pm, ...prev }));
+    setItems(its.map((i) => ({ slug: i.product.slug, quantity: i.quantity, name: i.product.name, unitPrice: i.unitPrice })));
+    // priceMap holds CATALOG prices (what a product normally costs) — it is the
+    // baseline the low-total warning compares against, so item overrides must
+    // not leak into it. Only seed a slug we don't know yet.
+    setPriceMap((prev) => {
+      const m = { ...prev };
+      its.forEach((i) => { if (m[i.product.slug] == null) m[i.product.slug] = i.unitPrice; });
+      return m;
+    });
+
+    // Reflect the saved delivery fee, and the saved total when it differs from
+    // items + delivery (i.e. she typed it by hand and it stuck).
+    const sub = its.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+    const ship = Number(o.deliveryPrice) || 0;
+    const tot = Number(o.total) || 0;
+    setDeliveryEdit(String(ship));
+    setTotalEdit(tot !== sub + ship ? String(tot) : "");
+
+    // State just came FROM the server — anything queued was what we sent.
+    dirty.current = false;
   }, []);
 
   const load = useCallback(async (tok: string) => {
@@ -106,48 +147,133 @@ export default function AgentOrder() {
     getJSON("/api/delivery", 4).then((d) => { if (d && (d as { wilayas?: unknown[] }).wilayas) setWilayas((d as { wilayas: Wilaya[] }).wilayas); });
   }, [token, load]);
 
-  const wilaya = useMemo(() => wilayas.find((w) => String(w.code) === String(f.wilayaCode)), [wilayas, f.wilayaCode]);
+  const wilaya = useMemo(() => wilayas.find((w) => wpad(w.code) === wpad(f.wilayaCode)), [wilayas, f.wilayaCode]);
   const communeOptions = useMemo(() => {
     if (!wilaya) return [];
     return f.deliveryType === "OFFICE" ? wilaya.communes.filter((c) => c.desk) : wilaya.communes;
   }, [wilaya, f.deliveryType]);
 
-  const preview = useMemo(() => {
-    const sub = items.reduce((s, it) => s + (priceMap[it.slug] || 0) * it.quantity, 0);
-    const fee = wilaya ? (f.deliveryType === "OFFICE" ? wilaya.stopdesk : wilaya.home) : null;
-    return { sub, fee, total: sub + (fee || 0) };
-  }, [items, priceMap, wilaya, f.deliveryType]);
+  // The wilaya's normal fee for the chosen delivery type (null = not loaded yet).
+  const normalFee = useMemo(
+    () => (wilaya ? (f.deliveryType === "OFFICE" ? wilaya.stopdesk : wilaya.home) : null),
+    [wilaya, f.deliveryType]
+  );
 
-  function set<K extends keyof typeof f>(k: K, v: string) { setF((s) => ({ ...s, [k]: v })); setMsg(""); }
-  function setQty(slug: string, d: number) {
-    setItems((its) => its.map((i) => i.slug === slug ? { ...i, quantity: Math.max(1, i.quantity + d) } : i)); setMsg("");
+  // What the money is RIGHT NOW, including her overrides.
+  const preview = useMemo(() => {
+    const sub = items.reduce((s, it) => s + (Number(it.unitPrice) || 0) * it.quantity, 0);
+    const fee = deliveryEdit === "" ? normalFee : Number(deliveryEdit) || 0;
+    const computed = sub + (fee || 0);
+    const total = totalEdit === "" ? computed : Number(totalEdit) || 0;
+    // Baseline: catalog prices + the wilaya's normal fee. Used only to spot a
+    // total that has fallen far enough to look like a typo.
+    const catalogSub = items.reduce((s, it) => s + (priceMap[it.slug] || 0) * it.quantity, 0);
+    const catalog = catalogSub + (normalFee || 0);
+    return { sub, fee, computed, total, catalog };
+  }, [items, deliveryEdit, totalEdit, normalFee, priceMap]);
+
+  // Every edit marks the form dirty; the auto-save effect below picks it up.
+  function touch() { dirty.current = true; setSaveState("idle"); setMsg(""); }
+
+  function set<K extends keyof typeof f>(k: K, v: string) { setF((s) => ({ ...s, [k]: v })); touch(); }
+
+  // Changing the products or where it's going makes a hand-typed total stale —
+  // the figure she agreed on the phone was for the OLD basket. Drop it and say
+  // so, rather than quietly shipping a total that no longer adds up.
+  function dropTotalOverride() {
+    setTotalEdit((t) => { if (t !== "") setOverrideDropped(true); return ""; });
+    lowOk.current = false;
   }
-  function removeItem(slug: string) { setItems((its) => its.filter((i) => i.slug !== slug)); setMsg(""); }
+  function setQty(slug: string, d: number) {
+    setItems((its) => its.map((i) => i.slug === slug ? { ...i, quantity: Math.max(1, i.quantity + d) } : i));
+    dropTotalOverride(); touch();
+  }
+  function setUnitPrice(slug: string, v: string) {
+    const n = v === "" ? 0 : Math.max(0, Math.round(Number(v) || 0));
+    setItems((its) => its.map((i) => i.slug === slug ? { ...i, unitPrice: n } : i));
+    lowOk.current = false; touch();
+  }
+  function removeItem(slug: string) { setItems((its) => its.filter((i) => i.slug !== slug)); dropTotalOverride(); touch(); }
   function addItem(slug: string) {
     if (!slug || items.some((i) => i.slug === slug)) return;
     const name = ({ roubla: "روبلة", dlala: "دلالة", "goul-bla-matgoul": "قول بلا متقول", "roubla-dlala-pack": "باك روبلة+دلالة", "eid-2026-bundle": "باك العيد" } as Record<string, string>)[slug] || slug;
-    setItems((its) => [...its, { slug, quantity: 1, name }]); setMsg("");
+    setItems((its) => [...its, { slug, quantity: 1, name, unitPrice: priceMap[slug] || 0 }]);
+    dropTotalOverride(); touch();
+  }
+  // Moving the parcel to a different wilaya / delivery type resets the fee to
+  // that wilaya's real price — a free-delivery deal for Algiers shouldn't
+  // silently follow the order to Tamanrasset.
+  function setDestination(k: "wilayaCode" | "deliveryType", v: string) {
+    setF((s) => ({ ...s, [k]: v, ...(k === "wilayaCode" ? { commune: "", officeCommune: "" } : {}) }));
+    setDeliveryEdit(""); dropTotalOverride(); touch();
   }
 
-  async function saveEdit() {
-    setBusy(true); setError(""); setMsg("");
+  const buildEdit = useCallback(() => {
+    const edit: Record<string, unknown> = {
+      customerName: f.customerName, customerPhone: f.customerPhone, customerPhone2: f.customerPhone2,
+      deliveryType: f.deliveryType, wilayaCode: f.wilayaCode, notes: f.notes,
+      items: items.map((i) => ({ slug: i.slug, quantity: i.quantity, unitPrice: i.unitPrice })),
+    };
+    if (deliveryEdit !== "") edit.deliveryPrice = Number(deliveryEdit) || 0;
+    if (totalEdit !== "") edit.total = Number(totalEdit) || 0;
+    if (f.deliveryType === "HOME") { edit.commune = f.commune; edit.address = f.address; }
+    else { edit.officeCommune = f.officeCommune || f.commune; edit.officeName = f.officeName; }
+    return edit;
+  }, [f, items, deliveryEdit, totalEdit]);
+
+  const saveEdit = useCallback(async () => {
+    setError("");
+    setSaveState("saving");
     try {
-      const edit: Record<string, unknown> = {
-        customerName: f.customerName, customerPhone: f.customerPhone, customerPhone2: f.customerPhone2,
-        deliveryType: f.deliveryType, wilayaCode: f.wilayaCode, notes: f.notes,
-        items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
-      };
-      if (f.deliveryType === "HOME") { edit.commune = f.commune; edit.address = f.address; }
-      else { edit.officeCommune = f.officeCommune || f.commune; edit.officeName = f.officeName; }
       const res = await fetch(`/api/agent/orders/${orderNumber}`, {
         method: "PATCH", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: "edit", edit }),
+        body: JSON.stringify({ action: "edit", edit: buildEdit() }),
       });
       const j = await res.json();
-      if (!res.ok) { setError(j.error || "فشل الحفظ"); return; }
-      hydrate(j.order); setMsg("تسجلات التبديلات ✓");
-    } finally { setBusy(false); }
-  }
+      if (!res.ok) { setError(j.error || "فشل الحفظ"); setSaveState("error"); return false; }
+      // She may have kept typing while this request was in flight. Re-filling
+      // the form from the response would then throw away those keystrokes —
+      // so when there are newer edits pending, refresh only the read-only
+      // parts and leave her inputs alone. The pending edit saves a beat later
+      // and brings everything back in step.
+      if (dirty.current) {
+        setOrder(j.order);
+        setEvents((j.order?.events as EventRow[]) || []);
+      } else {
+        hydrate(j.order);
+      }
+      setSaveState("saved");
+      return true;
+    } catch {
+      setError("ما تسجلاش — شوفي الأنترنت"); setSaveState("error"); return false;
+    }
+  }, [orderNumber, token, buildEdit, hydrate]);
+
+  // ── Auto-save ──
+  // Fires ~1s after she stops typing. Half-typed phone numbers and prices are
+  // therefore never sent mid-keystroke, and there is no button to forget.
+  // Blocked while the low-total warning is unanswered, so the guard rail
+  // actually guards something.
+  useEffect(() => {
+    if (!token || !order || !dirty.current) return;
+    // Once a parcel exists at Ecotrack the order is read-only — the courier is
+    // already working from that data and we have no way to amend it.
+    if (POST_SHIP_STATUSES.includes((order.status as StatusKey) || ("" as StatusKey))) return;
+    const t = setTimeout(() => {
+      if (!dirty.current) return;
+      const cat = preview.catalog;
+      if (!lowOk.current && cat > 0 && preview.total < cat * LOW_TOTAL_RATIO) {
+        setLowWarn({ computed: preview.total, catalog: cat });
+        return; // hold the save until she answers
+      }
+      dirty.current = false;
+      void saveEdit();
+    }, AUTOSAVE_MS);
+    return () => clearTimeout(t);
+    // preview covers items/prices; f covers the customer + destination fields.
+    // lowWarn is here so that dismissing the guard ("إيه، سجّلي") re-runs this
+    // effect and the held-back save actually goes through.
+  }, [f, items, deliveryEdit, totalEdit, preview, token, order, saveEdit, lowWarn]);
 
   async function postStatus(status: string, extra?: Record<string, unknown>) {
     setBusy(true); setError(""); setMsg("");
@@ -159,9 +285,22 @@ export default function AgentOrder() {
       const j = await res.json();
       if (!res.ok) { setError(j.error || "فشل"); return false; }
       hydrate(j.order);
-      setMsg(status === "CONFIRMED" ? "تأكد ✓ — دركا تقدري تبعثيه لإيكوتراك" : "تسجلات ✓");
+      setMsg(status === "CONFIRMED" ? "تأكد ✓" : "تسجلات ✓");
       return true;
     } finally { setBusy(false); }
+  }
+
+  // مأكد → ask, then create the parcel in the same click.
+  // If Ecotrack refuses, the order stays مأكد (not SHIPPED) so she can retry
+  // from the «ابعث لإيكوتراك» button without re-confirming.
+  async function confirmOrder() {
+    // Flush any pending edit first — otherwise a price she typed a moment ago
+    // would still be in the debounce window and the parcel would carry the
+    // OLD total.
+    if (dirty.current) { dirty.current = false; const ok = await saveEdit(); if (!ok) return; }
+    const ok = await postStatus("CONFIRMED");
+    if (!ok) return;
+    if (window.confirm("تبعثي هذا الطلب لإيكوتراك دركا؟")) await ship();
   }
 
   function openCallback() {
@@ -217,13 +356,10 @@ export default function AgentOrder() {
   const canShip = status === "CONFIRMED" || status === "PROCESSING";
   const attempts = (order?.callAttempts as number) || 0;
 
-  // Stored (saved) totals from the order itself — shown instantly, no fetch needed.
-  const oSub = order ? Number(order.subtotal) || 0 : 0;
-  const oShip = order ? Number(order.deliveryPrice) || 0 : 0;
-  const oTotal = order ? Number(order.total) || 0 : 0;
+  // The money block now renders the LIVE figures (preview), which auto-save
+  // keeps in step with the database — so there is no separate "saved vs edited"
+  // pair to reconcile any more.
   const deliveryReady = wilayas.length > 0;                // wilaya/commune data loaded?
-  // Show a "new total" line only when an edit actually changes the money.
-  const editedTotal = deliveryReady && order != null && (preview.total !== oTotal || preview.fee !== oShip);
 
   return (
     <div className="ao-wrap">
@@ -265,78 +401,105 @@ export default function AgentOrder() {
 
           <section className="ao-sec">
             <h3>الزبون</h3>
-            <label>الاسم<input value={f.customerName} onChange={(e) => set("customerName", e.target.value)} /></label>
+            <label>الاسم<input value={f.customerName} onChange={(e) => set("customerName", e.target.value)} disabled={postShip} /></label>
             <div className="ao-2">
-              <label>الهاتف<input value={f.customerPhone} onChange={(e) => set("customerPhone", e.target.value)} dir="ltr" /></label>
-              <label>هاتف 2<input value={f.customerPhone2} onChange={(e) => set("customerPhone2", e.target.value)} dir="ltr" /></label>
+              <label>الهاتف<input value={f.customerPhone} onChange={(e) => set("customerPhone", e.target.value)} dir="ltr" disabled={postShip} /></label>
+              <label>هاتف 2<input value={f.customerPhone2} onChange={(e) => set("customerPhone2", e.target.value)} dir="ltr" disabled={postShip} /></label>
             </div>
           </section>
 
           <section className="ao-sec">
             <h3>التوصيل</h3>
             <div className="ao-seg">
-              <button className={f.deliveryType === "HOME" ? "on" : ""} onClick={() => set("deliveryType", "HOME")}>للدار</button>
-              <button className={f.deliveryType === "OFFICE" ? "on" : ""} onClick={() => set("deliveryType", "OFFICE")}>مكتب</button>
+              <button className={f.deliveryType === "HOME" ? "on" : ""} onClick={() => setDestination("deliveryType", "HOME")} disabled={postShip}>للدار</button>
+              <button className={f.deliveryType === "OFFICE" ? "on" : ""} onClick={() => setDestination("deliveryType", "OFFICE")} disabled={postShip}>مكتب</button>
             </div>
             <label>الولاية
-              <select value={f.wilayaCode} onChange={(e) => { set("wilayaCode", e.target.value); set("commune", ""); set("officeCommune", ""); }}>
+              <select value={wpad(f.wilayaCode)} onChange={(e) => setDestination("wilayaCode", e.target.value)} disabled={postShip}>
                 <option value="">اختاري…</option>
-                {wilayas.map((w) => <option key={w.code} value={String(w.code)}>{(w.code < 10 ? "0" + w.code : w.code) + " - " + w.ar}</option>)}
+                {wilayas.map((w) => <option key={w.code} value={wpad(w.code)}>{wpad(w.code) + " - " + w.ar}</option>)}
               </select>
             </label>
             <label>{f.deliveryType === "OFFICE" ? "مكتب ستوب ديسك" : "البلدية"}
               <select value={f.deliveryType === "OFFICE" ? (f.officeCommune || f.commune) : f.commune}
-                onChange={(e) => set(f.deliveryType === "OFFICE" ? "officeCommune" : "commune", e.target.value)}>
+                onChange={(e) => set(f.deliveryType === "OFFICE" ? "officeCommune" : "commune", e.target.value)} disabled={postShip}>
                 <option value="">اختاري…</option>
                 {communeOptions.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
               </select>
             </label>
             {f.deliveryType === "HOME" && (
-              <label>العنوان<input value={f.address} onChange={(e) => set("address", e.target.value)} /></label>
+              <label>العنوان<input value={f.address} onChange={(e) => set("address", e.target.value)} disabled={postShip} /></label>
             )}
           </section>
 
           <section className="ao-sec">
             <h3>المنتجات</h3>
-            {items.map((it) => (
-              <div className="ao-item" key={it.slug}>
-                <span>{it.name} <small>({DA(priceMap[it.slug] || 0)})</small></span>
-                <div className="ao-qty">
-                  <button onClick={() => setQty(it.slug, -1)}>−</button><b>{it.quantity}</b><button onClick={() => setQty(it.slug, 1)}>+</button>
-                  <button className="ao-x" onClick={() => removeItem(it.slug)}>حذف</button>
+            {items.map((it) => {
+              const cat = priceMap[it.slug] || 0;
+              const changed = cat > 0 && it.unitPrice !== cat;
+              return (
+                <div className="ao-item" key={it.slug}>
+                  <span>{it.name}{changed && <small className="ao-was"> عادة {DA(cat)}</small>}</span>
+                  <div className="ao-qty">
+                    <input className={"ao-price" + (changed ? " ao-price-on" : "")} type="number" min={1} inputMode="numeric"
+                      value={it.unitPrice} onChange={(e) => setUnitPrice(it.slug, e.target.value)} disabled={postShip} />
+                    <button onClick={() => setQty(it.slug, -1)} disabled={postShip}>−</button><b>{it.quantity}</b><button onClick={() => setQty(it.slug, 1)} disabled={postShip}>+</button>
+                    <button className="ao-x" onClick={() => removeItem(it.slug)} disabled={postShip}>حذف</button>
+                  </div>
                 </div>
-              </div>
-            ))}
-            <select className="ao-add" value="" onChange={(e) => addItem(e.target.value)}>
+              );
+            })}
+            <select className="ao-add" value="" onChange={(e) => addItem(e.target.value)} disabled={postShip}>
               <option value="">+ زيدي منتج…</option>
               {Object.keys(priceMap).filter((s) => !items.some((i) => i.slug === s)).map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </section>
 
           <div className="ao-total">
+            <div className="ao-money">
+              <label>التوصيل
+                <input type="number" min={0} inputMode="numeric" disabled={postShip}
+                  value={deliveryEdit}
+                  placeholder={normalFee == null ? "—" : String(normalFee)}
+                  onChange={(e) => { setDeliveryEdit(e.target.value); lowOk.current = false; touch(); }} />
+                {deliveryEdit !== "" && normalFee != null && Number(deliveryEdit) !== normalFee && (
+                  <small className="ao-was">{Number(deliveryEdit) === 0 ? "بلاش" : `عادة ${DA(normalFee)}`}</small>
+                )}
+              </label>
+              <label>الإجمالي
+                <input type="number" min={0} inputMode="numeric" disabled={postShip}
+                  value={totalEdit}
+                  placeholder={String(preview.computed)}
+                  onChange={(e) => { setTotalEdit(e.target.value); lowOk.current = false; touch(); }} />
+                {totalEdit !== "" && <small className="ao-was">مكتوب باليد · {DA(preview.computed)} بالحساب</small>}
+              </label>
+            </div>
             <div className="ao-total-cur">
-              <span>المنتجات {DA(oSub)} + التوصيل {DA(oShip)}</span>
-              <b>الإجمالي: {DA(oTotal)}</b>
+              <span>المنتجات {DA(preview.sub)} + التوصيل {preview.fee == null ? "—" : DA(preview.fee)}</span>
+              <b>الإجمالي: {DA(preview.total)}</b>
             </div>
             {!deliveryReady && (
               <div className="ao-total-hint">جاري تحميل بيانات التوصيل… (باش تقدري تبدلي الولاية/نوع التوصيل)</div>
             )}
-            {editedTotal && (
-              <div className="ao-total-new">
-                <span>بعد التعديل: منتجات {DA(preview.sub)} + توصيل {preview.fee == null ? "—" : DA(preview.fee)}</span>
-                <b>= {DA(preview.total)}</b>
-                <em>اضغطي «احفظ» باش يتسجل</em>
+            {overrideDropped && (
+              <div className="ao-total-hint ao-warn-line">
+                بدّلتي المنتجات/الولاية — الإجمالي لي كتبتي باليد تمسح ورجع للحساب العادي.
+                <button className="ao-linkbtn" onClick={() => setOverrideDropped(false)}>فهمت</button>
               </div>
             )}
+            <div className={"ao-savestate ao-ss-" + saveState}>
+              {saveState === "saving" ? "يسجّل…"
+                : saveState === "saved" ? "محفوظ ✓"
+                : saveState === "error" ? "ما تسجلاش"
+                : postShip ? "الطلب مقفول — راه عند الموصّل" : "التبديلات تتسجل وحدها"}
+            </div>
           </div>
-
-          <button className="ao-save" disabled={busy} onClick={saveEdit}>{busy ? "…" : "احفظ التبديلات"}</button>
 
           {!postShip ? (
             <section className="ao-sec">
               <h3>نتيجة المكالمة</h3>
               <div className="ao-disp">
-                <button className="ao-d-ok" disabled={busy} onClick={() => postStatus("CONFIRMED")}>مأكد ✓</button>
+                <button className="ao-d-ok" disabled={busy} onClick={confirmOrder}>مأكد ✓</button>
                 <button className="ao-d-noans" disabled={busy} onClick={() => postStatus("NO_ANSWER")}>
                   ما جاوبش{attempts > 0 ? ` (${attempts}/${MAX_CALL_ATTEMPTS})` : ""}
                 </button>
@@ -393,6 +556,26 @@ export default function AgentOrder() {
             </div>
           </section>
         </>
+      )}
+
+      {/* ── low-total guard ──
+          Auto-save has no button to gate, so the warning holds the save until
+          she answers. «إيه» accepts the price for the rest of this edit;
+          «لا» puts the money back to the last saved figures. */}
+      {lowWarn && (
+        <div className="ao-overlay" onClick={() => { if (order) hydrate(order); setLowWarn(null); dirty.current = false; }}>
+          <div className="ao-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>الإجمالي ناقص بزاف</h3>
+            <p className="ao-warntxt">
+              هذا الطلب ولّى <b>{DA(lowWarn.computed)}</b> بلاصة <b>{DA(lowWarn.catalog)}</b> —
+              ناقص {Math.round((1 - lowWarn.computed / lowWarn.catalog) * 100)}%. واش راكي متأكدة؟
+            </p>
+            <div className="ao-modal-actions">
+              <button onClick={() => { if (order) hydrate(order); setLowWarn(null); dirty.current = false; }}>لا، رجّعي</button>
+              <button className="ao-primary" onClick={() => { lowOk.current = true; setLowWarn(null); dirty.current = true; }}>إيه، سجّلي</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── callback modal ── */}
@@ -476,8 +659,21 @@ const styles = `
   .ao-total-new{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-top:10px;padding-top:10px;border-top:1px dashed #cbbfa8;color:#2c7a1e}
   .ao-total-new b{font-size:1.15rem}
   .ao-total-new em{font-style:normal;font-size:.72rem;color:#675b4c;background:#eaf7e6;border:1px solid #a9d99a;border-radius:6px;padding:2px 7px}
-  .ao-save{width:100%;background:#161310;color:#fff;border:2px solid #161310;border-radius:12px;padding:13px;font-weight:800;font-size:1rem;cursor:pointer;margin-bottom:16px}
-  .ao-save:disabled{opacity:.5}
+  .ao-price{width:80px;height:34px;border:2px solid #161310;border-radius:8px;padding:0 7px;font-family:inherit;font-weight:800;font-size:.85rem;text-align:center;background:#fff}
+  .ao-price-on{background:#fff6d6;border-color:#c98a1b}
+  .ao-price:disabled,.ao-money input:disabled{opacity:.55;cursor:not-allowed}
+  .ao-was{display:block;font-size:.7rem;font-weight:700;color:#8a5a00;margin-top:2px}
+  .ao-money{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed #cbbfa8}
+  .ao-money label{display:block;font-size:.78rem;font-weight:800;color:#675b4c}
+  .ao-money input{width:100%;height:38px;border:2px solid #161310;border-radius:8px;padding:0 9px;font-family:inherit;font-weight:800;font-size:.95rem;background:#fff;margin-top:3px}
+  .ao-savestate{margin-top:10px;font-size:.78rem;font-weight:800;color:#675b4c}
+  .ao-ss-saving{color:#8a5a00} .ao-ss-saved{color:#2c7a1e} .ao-ss-error{color:#b3261e}
+  .ao-warn-line{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  .ao-linkbtn{border:2px solid #161310;border-radius:8px;background:#fff;padding:3px 10px;font-weight:800;font-size:.75rem;cursor:pointer;font-family:inherit}
+  .ao-warntxt{font-weight:700;line-height:1.6;margin:6px 0 14px}
+  .ao-modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+  .ao-modal-actions button{border:2px solid #161310;border-radius:10px;background:#fff;padding:10px 16px;font-weight:800;cursor:pointer;font-family:inherit}
+  .ao-modal-actions .ao-primary{background:#161310;color:#fff}
   .ao-disp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .ao-disp button{border:2px solid #161310;border-radius:10px;background:#fff;padding:12px;font-weight:800;cursor:pointer;font-size:.9rem}
   .ao-disp .ao-d-ok{background:#22c55e;color:#fff;box-shadow:3px 3px 0 #161310}

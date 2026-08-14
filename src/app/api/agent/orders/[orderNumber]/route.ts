@@ -214,15 +214,23 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const deliveryType: "HOME" | "OFFICE" = (e.deliveryType || existing.deliveryType) as "HOME" | "OFFICE";
       const wilayaCode: string = e.wilayaCode || existing.wilayaCode;
 
+      // unitPrice rides along per item so the agent can discount a single
+      // product on this order without touching the catalog.
       const items = Array.isArray(e.items) && e.items.length
-        ? e.items.map((i: { slug: string; quantity: number }) => ({ slug: i.slug, quantity: i.quantity }))
-        : existing.items.map((i) => ({ slug: i.product.slug, quantity: i.quantity }));
+        ? e.items.map((i: { slug: string; quantity: number; unitPrice?: unknown }) => ({
+            slug: i.slug, quantity: i.quantity, unitPrice: i.unitPrice,
+          }))
+        : existing.items.map((i) => ({ slug: i.product.slug, quantity: i.quantity, unitPrice: i.unitPrice }));
 
       if (e.customerPhone && !PHONE_RE.test(e.customerPhone)) {
         return NextResponse.json({ error: "رقم الهاتف غير صحيح" }, { status: 400 });
       }
 
-      const priced = await repriceOrder({ items, wilayaCode, deliveryType });
+      const priced = await repriceOrder({
+        items, wilayaCode, deliveryType,
+        deliveryPrice: e.deliveryPrice,
+        total: e.total,
+      });
       if (!priced.ok) return NextResponse.json({ error: priced.error }, { status: 400 });
 
       const orderData: Record<string, unknown> = {
@@ -258,15 +266,45 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       }
       await db.order.update({ where: { id: existing.id }, data: orderData });
 
+      // ── Timeline ──
+      // Edits now auto-save about a second after she stops typing, so a naive
+      // "one event per save" would bury the real call history under dozens of
+      // near-identical lines. Only a MONEY change is worth a line, and
+      // consecutive money edits by the same agent inside 10 minutes update the
+      // same line instead of stacking — the first "كان X" is preserved so the
+      // trail still shows what the customer was originally quoted.
       const moneyChanged = priced.total !== existing.total;
-      await db.orderEvent.create({
-        data: {
-          orderId: existing.id, kind: "system", actor: agentName,
-          note: moneyChanged
-            ? `عدّلت الطلب — الإجمالي ولّى ${priced.total} دج (كان ${existing.total})`
-            : "عدّلت بيانات الطلب",
-        },
-      });
+      if (moneyChanged) {
+        const bits: string[] = [];
+        if (priced.deliveryPrice === 0) bits.push("توصيل بلاش");
+        if (priced.totalOverridden) bits.push("إجمالي مكتوب باليد");
+        const suffix = bits.length ? ` — ${bits.join(" · ")}` : "";
+
+        const last = await db.orderEvent.findFirst({
+          where: { orderId: existing.id },
+          orderBy: { createdAt: "desc" },
+        });
+        const COALESCE_MS = 10 * 60 * 1000;
+        const isRecentEditByMe =
+          last?.kind === "system" &&
+          last.actor === agentName &&
+          typeof last.note === "string" &&
+          last.note.startsWith("عدّلت الطلب") &&
+          Date.now() - last.createdAt.getTime() < COALESCE_MS;
+
+        // Keep the ORIGINAL "was" figure when folding into an existing line.
+        const wasFrom = isRecentEditByMe ? last!.note!.match(/\(كان (\d+)\)/)?.[1] : undefined;
+        const was = wasFrom ?? String(existing.total);
+        const note = `عدّلت الطلب — الإجمالي ولّى ${priced.total} دج (كان ${was})${suffix}`;
+
+        if (isRecentEditByMe) {
+          await db.orderEvent.update({ where: { id: last!.id }, data: { note } });
+        } else {
+          await db.orderEvent.create({
+            data: { orderId: existing.id, kind: "system", actor: agentName, note },
+          });
+        }
+      }
 
       return NextResponse.json({ success: true, order: await loadOrder(num) });
     }
