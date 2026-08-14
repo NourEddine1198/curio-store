@@ -294,9 +294,22 @@ export async function POST(request: NextRequest) {
       return tooMany("عندك طلبات كثيرة. جرب بعد ساعة.");
     }
 
-    if (!wilayaCode || typeof wilayaCode !== "string") {
+    if (
+      wilayaCode === undefined ||
+      wilayaCode === null ||
+      wilayaCode === "" ||
+      (typeof wilayaCode !== "string" && typeof wilayaCode !== "number")
+    ) {
       return badRequest("لازم تختار الولاية");
     }
+
+    // Wilaya codes are stored 2-digit ("01".."58"). The checkout pages build
+    // their dropdown from delivery.json, where the code is a plain number, so
+    // wilayas 1-9 arrived here as "1".."9" and failed the lookup below —
+    // silently killing every order from those 9 wilayas. Normalise on the way
+    // in so any client (including pages already cached in customers' browsers)
+    // resolves correctly.
+    const normalizedWilayaCode = String(wilayaCode).trim().padStart(2, "0");
 
     if (deliveryType !== "HOME" && deliveryType !== "OFFICE") {
       return badRequest("نوع التوصيل لازم يكون HOME أو OFFICE");
@@ -324,7 +337,7 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Look up wilaya from database ---
-    const wilaya = await db.wilaya.findUnique({ where: { code: wilayaCode } });
+    const wilaya = await db.wilaya.findUnique({ where: { code: normalizedWilayaCode } });
 
     if (!wilaya || !wilaya.active) {
       return badRequest("الولاية غير متوفرة للتوصيل");
@@ -449,7 +462,7 @@ export async function POST(request: NextRequest) {
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         customerPhone2: customerPhone2?.trim() || null,
-        wilayaCode,
+        wilayaCode: normalizedWilayaCode,
         wilayaName: wilaya.name,
         deliveryType,
         commune: deliveryType === "HOME" ? commune.trim() : null,
