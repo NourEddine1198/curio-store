@@ -247,6 +247,36 @@ model PageContent {
   @@index([page])
 }
 
+// ─── Checkout failures (the "lost order" log) ──────────────
+// Every time /api/orders turns a customer away, one row lands here.
+// Why this exists: for five weeks in Jul-Aug 2026 the checkout rejected
+// EVERY order from wilayas 01-09 (a leading-zero mismatch) and nobody
+// knew, because a refused order leaves no trace anywhere — no Order row,
+// no alert. It only surfaced when customers complained. This table is
+// that missing trace.
+//
+// It stores the phone and name when the customer got that far, so these
+// are not just a number on a chart — they are a call-back list.
+// Writing here must NEVER block or break a checkout: all writes are
+// wrapped and swallowed. Nothing reads this except the dashboard.
+model CheckoutFailure {
+  id         String   @id @default(cuid())
+  reason     String                        // stable code: "wilaya_unavailable", "out_of_stock", ...
+  message    String   @db.Text             // the Arabic text the customer actually saw
+  status     Int      @default(400)        // HTTP status returned (400 | 429 | 500)
+  silent     Boolean  @default(false)      // true = customer saw a FAKE success (bot traps)
+  page       String?                       // referer path: "/roubla/", "/dlala/", "/"
+  wilayaCode String?                       // as received, unnormalised — the tell for format bugs
+  phone      String?                       // so the owner can call them back
+  name       String?
+  slugs      String[]                      // product slugs they were trying to buy
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([reason, createdAt])
+}
+
 // ─── Site settings (tiny key/value store) ──────────────────
 // Small global flags/values, e.g. live prices or a launch switch.
 model SiteSetting {

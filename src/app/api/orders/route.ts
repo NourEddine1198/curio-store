@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { sendToOrderDZ } from "@/lib/orderdz";
 import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
 import { countCapUses } from "@/lib/influencer-stats";
+import { recordCheckoutFailure, pageFromReferer } from "@/lib/checkout-failures";
 
 // ─── Validation helpers ──────────────────────────────────
 
@@ -94,16 +95,8 @@ async function validateCoupon(
   return { valid: true, discount: influencer.customerDiscount };
 }
 
-function badRequest(message: string) {
-  return NextResponse.json({ error: message }, { status: 400 });
-}
-
 function unauthorized() {
   return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
-}
-
-function tooMany(message: string) {
-  return NextResponse.json({ error: message }, { status: 429 });
 }
 
 /**
@@ -195,24 +188,70 @@ export async function GET(request: NextRequest) {
 // ─── POST /api/orders — Create a new order ───────────────
 
 export async function POST(request: NextRequest) {
+  // Filled in as soon as we've parsed the body, so a failure row carries who
+  // it was and what they were trying to buy. Declared out here so the 500
+  // handler at the bottom can still log whatever we knew.
+  const ctx: {
+    page: string | null;
+    ip: string | null;
+    phone?: unknown;
+    name?: unknown;
+    wilayaCode?: unknown;
+    slugs?: string[];
+  } = { page: pageFromReferer(request.headers.get("referer")), ip: null };
+
+  /**
+   * Turn a customer away AND write it to the lost-order log. Every rejection
+   * in this handler goes through here — a refused checkout used to vanish
+   * without a trace, which is how a 5-week outage stayed invisible.
+   * The log write is awaited but self-swallowing: it cannot fail the request.
+   */
+  async function reject(reason: string, message: string, status = 400) {
+    await recordCheckoutFailure({ reason, message, status, ...ctx });
+    return NextResponse.json({ error: message }, { status });
+  }
+
+  /**
+   * Bot traps answer with a FAKE success, so the customer (or bot) sees no
+   * error at all. Logged as silent so a real person caught by the speed trap
+   * isn't invisible — that would be the same blind spot all over again.
+   */
+  async function fakeSuccess(reason: string) {
+    await recordCheckoutFailure({
+      reason,
+      message: "(fake success returned — customer saw no error)",
+      status: 201,
+      silent: true,
+      ...ctx,
+    });
+    return NextResponse.json(
+      {
+        success: true,
+        orderNumber: Math.floor(Math.random() * 90000) + 10000,
+        total: 0,
+        message: "تم تسجيل طلبك بنجاح. راح نتصلو بيك قريبا للتأكيد.",
+      },
+      { status: 201 }
+    );
+  }
+
   try {
     const body = await request.json();
     const clientIp = getClientIp(request);
+    ctx.ip = clientIp !== "unknown" ? clientIp : null;
+    ctx.phone = body?.customerPhone;
+    ctx.name = body?.customerName;
+    ctx.wilayaCode = body?.wilayaCode;
+    ctx.slugs = Array.isArray(body?.items)
+      ? body.items.map((i: { slug?: string }) => i?.slug).filter(Boolean)
+      : [];
 
     // ─── SECURITY CHECK 1: Honeypot ─────────────────────
     // Frontend has a hidden field called "website". Humans never see it.
     // Bots auto-fill it. If it has a value → silent reject (looks like success to the bot).
     if (body.website) {
       // Return fake success so bots think it worked
-      return NextResponse.json(
-        {
-          success: true,
-          orderNumber: Math.floor(Math.random() * 90000) + 10000,
-          total: 0,
-          message: "تم تسجيل طلبك بنجاح. راح نتصلو بيك قريبا للتأكيد.",
-        },
-        { status: 201 }
-      );
+      return await fakeSuccess("bot_honeypot");
     }
 
     // ─── SECURITY CHECK 2: Speed trap ───────────────────
@@ -223,15 +262,7 @@ export async function POST(request: NextRequest) {
       const elapsed = Date.now() - formLoadedAt;
       if (elapsed < MIN_SUBMIT_TIME_MS) {
         // Too fast — silent fake success
-        return NextResponse.json(
-          {
-            success: true,
-            orderNumber: Math.floor(Math.random() * 90000) + 10000,
-            total: 0,
-            message: "تم تسجيل طلبك بنجاح. راح نتصلو بيك قريبا للتأكيد.",
-          },
-          { status: 201 }
-        );
+        return await fakeSuccess("bot_speed_trap");
       }
     }
 
@@ -247,7 +278,7 @@ export async function POST(request: NextRequest) {
       });
 
       if (recentOrdersByIp >= RATE_LIMIT_MAX_ORDERS) {
-        return tooMany("بزاف ديال الطلبات! جرب بعد شويا.");
+        return await reject("rate_limit_ip", "بزاف ديال الطلبات! جرب بعد شويا.", 429);
       }
     }
 
@@ -269,15 +300,15 @@ export async function POST(request: NextRequest) {
 
     // --- Validate required fields ---
     if (!customerName || typeof customerName !== "string" || customerName.trim().length < 2) {
-      return badRequest("الاسم مطلوب (حرفين على الأقل)");
+      return await reject("name_missing", "الاسم مطلوب (حرفين على الأقل)");
     }
 
     if (!customerPhone || !PHONE_RE.test(customerPhone)) {
-      return badRequest("رقم الهاتف لازم يكون 10 أرقام ويبدا بـ 05 أو 06 أو 07");
+      return await reject("phone_invalid", "رقم الهاتف لازم يكون 10 أرقام ويبدا بـ 05 أو 06 أو 07");
     }
 
     if (customerPhone2 && !PHONE_RE.test(customerPhone2)) {
-      return badRequest("رقم الهاتف الثاني غير صحيح");
+      return await reject("phone2_invalid", "رقم الهاتف الثاني غير صحيح");
     }
 
     // ─── SECURITY CHECK 4: Phone number cooldown ────────
@@ -291,7 +322,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (recentOrdersByPhone >= PHONE_MAX_ORDERS) {
-      return tooMany("عندك طلبات كثيرة. جرب بعد ساعة.");
+      return await reject("rate_limit_phone", "عندك طلبات كثيرة. جرب بعد ساعة.", 429);
     }
 
     if (
@@ -300,7 +331,7 @@ export async function POST(request: NextRequest) {
       wilayaCode === "" ||
       (typeof wilayaCode !== "string" && typeof wilayaCode !== "number")
     ) {
-      return badRequest("لازم تختار الولاية");
+      return await reject("wilaya_missing", "لازم تختار الولاية");
     }
 
     // Wilaya codes are stored 2-digit ("01".."58"). The checkout pages build
@@ -312,42 +343,42 @@ export async function POST(request: NextRequest) {
     const normalizedWilayaCode = String(wilayaCode).trim().padStart(2, "0");
 
     if (deliveryType !== "HOME" && deliveryType !== "OFFICE") {
-      return badRequest("نوع التوصيل لازم يكون HOME أو OFFICE");
+      return await reject("delivery_type_invalid", "نوع التوصيل لازم يكون HOME أو OFFICE");
     }
 
     if (deliveryType === "HOME" && (!address || address.trim().length < 5)) {
-      return badRequest("دخل العنوان بالتفصيل (5 حروف على الأقل)");
+      return await reject("address_too_short", "دخل العنوان بالتفصيل (5 حروف على الأقل)");
     }
 
     if (deliveryType === "HOME" && (!commune || typeof commune !== "string" || !commune.trim())) {
-      return badRequest("اختار البلدية");
+      return await reject("commune_missing", "اختار البلدية");
     }
 
     if (deliveryType === "OFFICE" && !officeCommune) {
-      return badRequest("اختار المكتب لي تحب تستلم منه");
+      return await reject("office_missing", "اختار المكتب لي تحب تستلم منه");
     }
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return badRequest("لازم تختار منتج واحد على الأقل");
+      return await reject("items_empty", "لازم تختار منتج واحد على الأقل");
     }
 
     // Cap items array to prevent abuse (nobody orders 50 different products)
     if (items.length > 10) {
-      return badRequest("الطلب فيه بزاف ديال المنتجات");
+      return await reject("items_too_many", "الطلب فيه بزاف ديال المنتجات");
     }
 
     // --- Look up wilaya from database ---
     const wilaya = await db.wilaya.findUnique({ where: { code: normalizedWilayaCode } });
 
     if (!wilaya || !wilaya.active) {
-      return badRequest("الولاية غير متوفرة للتوصيل");
+      return await reject("wilaya_unavailable", "الولاية غير متوفرة للتوصيل");
     }
 
     const deliveryPrice =
       deliveryType === "HOME" ? wilaya.homePrice : wilaya.officePrice;
 
     if (deliveryPrice === 0) {
-      return badRequest("التوصيل غير متوفر لهذه الولاية حاليا");
+      return await reject("wilaya_no_price", "التوصيل غير متوفر لهذه الولاية حاليا");
     }
 
     // --- Look up products and check stock (READ-ONLY — no decrement) ---
@@ -361,7 +392,7 @@ export async function POST(request: NextRequest) {
         });
 
     if (products.length !== items.length) {
-      return badRequest("واحد من المنتجات غير متوفر");
+      return await reject("product_unavailable", "واحد من المنتجات غير متوفر");
     }
 
     // Build lookup by both id and slug
@@ -375,7 +406,7 @@ export async function POST(request: NextRequest) {
     for (const item of items) {
       const product = item.slug ? productBySlug.get(item.slug) : productById.get(item.productId);
       if (!product) {
-        return badRequest("منتج غير معروف");
+        return await reject("product_unknown", "منتج غير معروف");
       }
 
       const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
@@ -385,7 +416,7 @@ export async function POST(request: NextRequest) {
       // This prevents fake orders from draining inventory.
       // When stock = 0, accept as waitlist (for next batch contact).
       if (product.stock > 0 && qty > product.stock) {
-        return badRequest(`${product.name} — الكمية المطلوبة غير متوفرة (باقي ${product.stock})`);
+        return await reject("out_of_stock", `${product.name} — الكمية المطلوبة غير متوفرة (باقي ${product.stock})`);
       }
       if (product.stock <= 0) {
         hasWaitlistItem = true;
@@ -425,7 +456,7 @@ export async function POST(request: NextRequest) {
       normalizedCoupon = couponCode.trim().toUpperCase();
       const couponResult = await validateCoupon(normalizedCoupon, cartSlugs);
       if (!couponResult.valid) {
-        return badRequest(couponResult.error);
+        return await reject("coupon_rejected", couponResult.error);
       }
       discountAmount = couponResult.discount;
     }
@@ -593,9 +624,15 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     console.error("POST /api/orders error:", error);
-    return NextResponse.json(
-      { error: "صار مشكل في تسجيل الطلب. حاول مرة أخرى." },
-      { status: 500 }
-    );
+    // A crash costs a customer just as much as a validation refusal, so it
+    // belongs in the same log — with the error text, to make it debuggable.
+    const message = "صار مشكل في تسجيل الطلب. حاول مرة أخرى.";
+    await recordCheckoutFailure({
+      reason: "server_error",
+      message: `${message} [${error instanceof Error ? error.message : String(error)}]`,
+      status: 500,
+      ...ctx,
+    });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

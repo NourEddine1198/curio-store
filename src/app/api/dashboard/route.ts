@@ -48,6 +48,18 @@ type Stage =
   | "returned"
   | "cancelled";
 
+interface FailureRow {
+  reason: string;
+  message: string;
+  status: number;
+  silent: boolean;
+  page: string | null;
+  wilayaCode: string | null;
+  phone: string | null;
+  name: string | null;
+  createdAt: Date;
+}
+
 interface OrderRow {
   orderNumber: number;
   status: string;
@@ -69,8 +81,8 @@ export async function GET(request: NextRequest) {
     const d7 = new Date(now.getTime() - 7 * 86400000);
     const d30 = new Date(now.getTime() - 30 * 86400000);
 
-    // ── All orders (capped) + active products, in parallel ──
-    const [orders, products] = (await Promise.all([
+    // ── All orders (capped) + active products + the lost-order log ──
+    const [orders, products, failures] = (await Promise.all([
       db.order.findMany({
         select: {
           orderNumber: true,
@@ -89,7 +101,18 @@ export async function GET(request: NextRequest) {
         select: { slug: true, name: true, nameEn: true, stock: true, price: true },
         orderBy: { createdAt: "asc" },
       }),
-    ])) as [OrderRow[], { slug: string; name: string; nameEn: string | null; stock: number; price: number }[]];
+      // Checkout failures — 30 days is enough to spot an outage and still
+      // have a call-back list. Older rows stay in the table, just unread.
+      db.checkoutFailure.findMany({
+        where: { createdAt: { gte: d30 } },
+        orderBy: { createdAt: "desc" },
+        take: 3000,
+      }),
+    ])) as [
+      OrderRow[],
+      { slug: string; name: string; nameEn: string | null; stock: number; price: number }[],
+      FailureRow[]
+    ];
 
     // ── Ecotrack list (read-only) → phone → orders map ──
     const eco = await getEcotrackListCached();
@@ -277,6 +300,52 @@ export async function GET(request: NextRequest) {
 
     const allDays = Math.max(1, Math.round((now.getTime() - earliest) / 86400000));
 
+    // ── Checkout failures — the lost-order log ──
+    // Bot traps are counted apart: they're mostly real bots, and mixing them
+    // in would bury a genuine outage under noise. Everything else is a human
+    // who wanted to buy and was turned away.
+    const realFails = failures.filter((f) => !f.silent);
+    const botFails = failures.filter((f) => f.silent);
+
+    const failWindow = (from: Date) => {
+      const subset = realFails.filter((f) => f.createdAt >= from);
+      const byReason: Record<string, number> = {};
+      for (const f of subset) byReason[f.reason] = (byReason[f.reason] || 0) + 1;
+      const placed = orders.filter((o) => o.createdAt >= from).length;
+      const attempts = placed + subset.length;
+      return {
+        count: subset.length,
+        // Share of everyone who pressed the button and did NOT get an order.
+        lostPct: attempts > 0 ? (subset.length / attempts) * 100 : 0,
+        byReason: Object.entries(byReason)
+          .map(([reason, count]) => ({ reason, count }))
+          .sort((a, b) => b.count - a.count),
+      };
+    };
+
+    // The call-back list: one row per person (most recent attempt wins), only
+    // those who got far enough to leave a phone number. This is the thing the
+    // old blind spot destroyed — proof of who we lost.
+    const seenPhones = new Set<string>();
+    const callback: {
+      phone: string; name: string | null; reason: string; message: string;
+      wilayaCode: string | null; page: string | null; at: string; tries: number;
+    }[] = [];
+    const triesByPhone: Record<string, number> = {};
+    for (const f of realFails) if (f.phone) triesByPhone[f.phone] = (triesByPhone[f.phone] || 0) + 1;
+    // Anyone who later succeeded doesn't belong on a call-back list.
+    const succeededPhones = new Set(orders.filter((o) => o.createdAt >= d30).map((o) => o.customerPhone));
+    for (const f of realFails) {
+      if (!f.phone || seenPhones.has(f.phone) || succeededPhones.has(f.phone)) continue;
+      seenPhones.add(f.phone);
+      callback.push({
+        phone: f.phone, name: f.name, reason: f.reason, message: f.message,
+        wilayaCode: f.wilayaCode, page: f.page,
+        at: f.createdAt.toISOString(), tries: triesByPhone[f.phone] || 1,
+      });
+      if (callback.length >= 40) break;
+    }
+
     return NextResponse.json({
       generatedAt: now.toISOString(),
       totalOrdersAllTime: orders.length,
@@ -295,6 +364,18 @@ export async function GET(request: NextRequest) {
       inventory: products.map((p) => ({
         slug: p.slug, name: p.name, nameEn: p.nameEn, stock: p.stock, price: p.price,
       })),
+      checkoutFailures: {
+        today: failWindow(todayStart),
+        week: failWindow(d7),
+        month: failWindow(d30),
+        botsToday: botFails.filter((f) => f.createdAt >= todayStart).length,
+        botsMonth: botFails.length,
+        callback,
+        // Null until the first failure is ever recorded — lets the dashboard
+        // say "watching since X" instead of implying 30 clean days we can't
+        // actually vouch for (the log only started when it was deployed).
+        oldest: failures.length ? failures[failures.length - 1].createdAt.toISOString() : null,
+      },
       ecotrack: {
         ok: eco.ok,
         error: eco.error || null,

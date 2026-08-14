@@ -29,6 +29,21 @@ interface PeriodMetrics {
   perProductDeliveredUnits: Record<string, number>;
   perProduct: Record<string, PerProduct>;
 }
+interface FailWindow {
+  count: number;
+  lostPct: number;
+  byReason: { reason: string; count: number }[];
+}
+interface CallbackRow {
+  phone: string; name: string | null; reason: string; message: string;
+  wilayaCode: string | null; page: string | null; at: string; tries: number;
+}
+interface CheckoutFailures {
+  today: FailWindow; week: FailWindow; month: FailWindow;
+  botsToday: number; botsMonth: number;
+  callback: CallbackRow[];
+  oldest: string | null;
+}
 interface DashboardData {
   generatedAt: string;
   totalOrdersAllTime: number;
@@ -36,7 +51,52 @@ interface DashboardData {
   periods: Record<PeriodKey, PeriodMetrics>;
   weekly: { weekStart: string; orders: number; deliveredRevenue: number }[];
   inventory: { slug: string; name: string; nameEn: string | null; stock: number; price: number }[];
+  checkoutFailures?: CheckoutFailures;
   ecotrack: { ok: boolean; error: string | null; ordersInEcotrack: number; matchedToStore: number; globalStatusCounts: Record<string, number> };
+}
+
+// Plain English for each machine reason code. Mirrors FAILURE_LABELS in
+// src/lib/checkout-failures.ts — an unknown code falls back to the raw code
+// rather than hiding the row.
+const FAIL_LABELS: Record<string, string> = {
+  name_missing: "Name missing or too short",
+  phone_invalid: "Phone number invalid",
+  phone2_invalid: "Backup phone invalid",
+  wilaya_missing: "No wilaya chosen",
+  wilaya_unavailable: "Wilaya refused — not in our delivery list",
+  wilaya_no_price: "Wilaya has no delivery price set",
+  delivery_type_invalid: "Delivery type invalid",
+  address_too_short: "Address missing or too short",
+  commune_missing: "No commune chosen",
+  office_missing: "No stop-desk chosen",
+  items_empty: "Empty cart",
+  items_too_many: "Too many different products",
+  product_unavailable: "A product was inactive or unknown",
+  product_unknown: "Product not found",
+  out_of_stock: "Not enough stock",
+  coupon_rejected: "Coupon rejected",
+  rate_limit_ip: "Blocked — too many orders from one connection",
+  rate_limit_phone: "Blocked — too many orders from one phone",
+  server_error: "Server error — our fault",
+  bot_honeypot: "Bot trap: hidden field filled",
+  bot_speed_trap: "Bot trap: submitted in under 3 seconds",
+};
+const failLabel = (r: string) => FAIL_LABELS[r] || r;
+
+// Reasons that mean WE broke, not the customer mistyping. These are the ones
+// worth waking up for — the wilaya bug lived in this family for five weeks.
+const OUR_FAULT = new Set([
+  "wilaya_unavailable", "wilaya_no_price", "product_unavailable",
+  "product_unknown", "out_of_stock", "server_error", "coupon_rejected",
+]);
+
+function timeAgo(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const h = Math.floor(mins / 60);
+  if (h < 24) return h + "h ago";
+  return Math.floor(h / 24) + "d ago";
 }
 
 interface ProductSetting { label: string; unitCost: number; printRun: number; }
@@ -197,10 +257,31 @@ export default function CommandCenter() {
     return data.inventory.reduce((sum, p) => sum + p.stock * (settings.products[p.slug]?.unitCost ?? settings.defaultUnitCost), 0);
   }, [data, settings]);
 
+  // Checkout failures for the currently selected window ("all" has no
+  // equivalent — the log only keeps 30 days, so it reads as the month).
+  const fails = useMemo(() => {
+    const cf = data?.checkoutFailures;
+    if (!cf) return null;
+    return period === "today" ? cf.today : period === "week" ? cf.week : cf.month;
+  }, [data, period]);
+
   // Auto-insights for the "Ask Claude" panel (rule-based now; AI later).
   const insights = useMemo(() => {
     const out: { icon: string; head: string; body: string }[] = [];
     if (!cur || !data || !profit) return out;
+
+    // Highest priority: customers being turned away right now. A single
+    // our-fault reason repeating is what a real outage looks like.
+    const cf = data.checkoutFailures;
+    if (cf && cf.today.count > 0) {
+      const worst = cf.today.byReason.find((r) => OUR_FAULT.has(r.reason));
+      if (worst && worst.count >= 3) {
+        out.push({ icon: "🚨", head: "Checkout is turning people away", body: `${worst.count} customers today hit "${failLabel(worst.reason)}". That is our bug, not theirs — check it before spending another dinar on ads.` });
+      } else {
+        out.push({ icon: "🚨", head: "Lost checkouts today", body: `${cf.today.count} ${cf.today.count === 1 ? "person" : "people"} tried to order and couldn't (${cf.today.lostPct.toFixed(0)}% of attempts). See "Lost checkouts" below for their numbers.` });
+      }
+    }
+
     for (const p of data.inventory) {
       const pp = cur.perProduct[p.slug];
       if (pp && pp.orders + pp.returned >= 4) {
@@ -384,6 +465,78 @@ export default function CommandCenter() {
             })}
           </div>
 
+          {/* ───── LOST CHECKOUTS ───── */}
+          <div className="cc-sect-sm">
+            <h3>🚨 Lost checkouts — people who tried and couldn&apos;t</h3>
+            <span className="cc-when">{period === "today" ? "today" : period === "week" ? "last 7 days" : "last 30 days"}</span>
+          </div>
+          {!data.checkoutFailures ? (
+            <div className="cc-card cc-dashed"><p className="cc-muted cc-sm">Not recording yet — deploy the store API to start the log.</p></div>
+          ) : (
+            <div className="cc-card cc-card-pad">
+              <div className="cc-fhead">
+                <div className={"cc-fbig " + (fails && fails.count > 0 ? "cc-bad" : "cc-ok")}>
+                  {fmt(fails?.count ?? 0)}<small>{(fails?.count ?? 0) === 1 ? " person" : " people"}</small>
+                </div>
+                <div className="cc-fmeta">
+                  <div className="cc-lbl">{(fails?.lostPct ?? 0).toFixed(0)}% of everyone who pressed &quot;order&quot;</div>
+                  <div className="cc-tiny cc-muted">
+                    {data.checkoutFailures.oldest
+                      ? "watching since " + new Date(data.checkoutFailures.oldest).toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+                      : "watching — nothing logged yet"}
+                    {data.checkoutFailures.botsMonth > 0 && <> · {fmt(data.checkoutFailures.botsMonth)} bot attempts blocked (not counted)</>}
+                  </div>
+                </div>
+              </div>
+
+              {(fails?.count ?? 0) === 0 ? (
+                <div className="cc-chip cc-chip-good cc-mt">✅ Nobody was turned away. Every person who pressed &quot;order&quot; got an order.</div>
+              ) : (
+                <>
+                  <div className="cc-freasons">
+                    {fails?.byReason.map((r) => {
+                      const ours = OUR_FAULT.has(r.reason);
+                      const pct = fails.count > 0 ? (r.count / fails.count) * 100 : 0;
+                      return (
+                        <div key={r.reason} className="cc-frow">
+                          <div className="cc-fname">
+                            {ours && <span className="cc-pill cc-kill">our bug</span>}
+                            {failLabel(r.reason)}
+                          </div>
+                          <div className="cc-fbar"><i style={{ width: Math.max(3, pct) + "%", background: ours ? "#e0654c" : "#c98a1b" }} /></div>
+                          <div className="cc-fcount">{fmt(r.count)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="cc-tiny cc-muted cc-mt">
+                    <b>&quot;our bug&quot;</b> = the site refused them for a reason they couldn&apos;t fix (wilaya, stock, coupon, crash). Those are the ones to chase.
+                    The rest are usually typos — a phone in the wrong format, a missing address.
+                  </p>
+                </>
+              )}
+
+              {data.checkoutFailures.callback.length > 0 && (
+                <>
+                  <div className="cc-card-h cc-mt"><h4>📞 Call these people back</h4></div>
+                  <p className="cc-tiny cc-muted">They left a phone number, never got an order, and haven&apos;t ordered since. Newest first.</p>
+                  <div className="cc-ftable">
+                    <div className="cc-ftr cc-fth"><span>Who</span><span>Wilaya</span><span>What stopped them</span><span>When</span><span /></div>
+                    {data.checkoutFailures.callback.map((c) => (
+                      <div key={c.phone} className="cc-ftr">
+                        <span className="cc-fwho"><b>{c.name || "—"}</b><small>{c.phone}{c.tries > 1 && ` · tried ${c.tries}×`}</small></span>
+                        <span>{c.wilayaCode || "—"}</span>
+                        <span className={OUR_FAULT.has(c.reason) ? "cc-bad" : ""}>{failLabel(c.reason)}</span>
+                        <span className="cc-muted">{timeAgo(c.at)}</span>
+                        <span><a className="cc-btn cc-ghost cc-btn-sm" href={"tel:" + c.phone}>Call</a></span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Health + trend */}
           <div className="cc-sect-sm"><h3>🚦 Health &amp; trend</h3><span className="cc-when">{cur.label}</span></div>
           <div className="cc-duo">
@@ -496,6 +649,12 @@ function Style() {
     .cc-scover .cc-cval{font-family:var(--disp);font-weight:700;font-size:16px;} .cc-coverbar{height:7px;border-radius:999px;background:var(--cream);border:1px solid var(--line);overflow:hidden;margin-top:5px;max-width:120px;} .cc-coverbar i{display:block;height:100%;}
     .cc-sstock{font-family:var(--disp);font-weight:700;font-size:16px;} .cc-sstock small{font-family:var(--body);font-weight:700;font-size:10.5px;color:var(--muted);text-transform:uppercase;display:block;}
     .cc-pill{font-size:11px;font-weight:800;padding:4px 11px;border-radius:999px;} .cc-scale{background:var(--greensoft);color:var(--green);border:1px solid var(--greenline);} .cc-kill{background:var(--coralsoft);color:#b34a33;border:1px solid var(--coralline);} .cc-watch{background:var(--ambersoft);color:var(--amber);border:1px solid var(--amberline);}
+    .cc-fhead{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;} .cc-fbig{font-family:var(--disp);font-weight:700;font-size:36px;line-height:1;} .cc-fbig small{font-family:var(--body);font-size:14px;font-weight:700;color:var(--muted);} .cc-fmeta{flex:1;min-width:180px;}
+    .cc-freasons{margin-top:14px;} .cc-frow{display:grid;grid-template-columns:minmax(150px,1.6fr) 1fr 42px;align-items:center;gap:12px;padding:8px 2px;border-bottom:1px dashed var(--line);} .cc-frow:last-child{border-bottom:none;}
+    .cc-fname{font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;flex-wrap:wrap;} .cc-fbar{height:8px;border-radius:999px;background:var(--cream);border:1px solid var(--line);overflow:hidden;} .cc-fbar i{display:block;height:100%;} .cc-fcount{font-family:var(--disp);font-weight:700;font-size:16px;text-align:right;}
+    .cc-ftable{margin-top:10px;border:1px solid var(--line);border-radius:14px;overflow:hidden;} .cc-ftr{display:grid;grid-template-columns:minmax(130px,1.4fr) .5fr 1.5fr .7fr auto;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid var(--line);font-size:12.5px;} .cc-ftr:first-child{border-top:none;}
+    .cc-fth{background:var(--cream2);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--soft);font-weight:800;} .cc-fwho{display:flex;flex-direction:column;} .cc-fwho small{color:var(--muted);font-weight:700;font-size:11px;} .cc-btn-sm{padding:4px 10px;font-size:11.5px;text-decoration:none;display:inline-block;}
+    @media(max-width:700px){.cc-ftr{grid-template-columns:1.4fr 1fr auto;} .cc-ftr>span:nth-child(2),.cc-ftr>span:nth-child(4){display:none;} .cc-fth{display:none;}}
     .cc-duo{display:grid;gap:16px;} @media(min-width:820px){.cc-duo{grid-template-columns:.85fr 1.15fr;}}
     .cc-gauges{display:grid;gap:12px;grid-template-columns:1fr 1fr;} .cc-gauge{border-radius:16px;padding:14px 15px;border:1px solid var(--line);background:var(--cream2);} .cc-g-good{background:var(--greensoft);border-color:var(--greenline);} .cc-g-good .cc-gv{color:var(--green);} .cc-gv{font-family:var(--disp);font-weight:700;font-size:27px;}
     .cc-bars{height:150px;display:flex;align-items:flex-end;gap:8px;padding:6px 2px 0;} .cc-col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;} .cc-b{width:100%;border-radius:7px 7px 0 0;background:var(--goldb);} .cc-col:last-child .cc-b{background:var(--gold);} .cc-col small{font-size:10px;color:var(--muted);font-weight:700;}
