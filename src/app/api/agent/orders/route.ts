@@ -80,12 +80,29 @@ export async function GET(request: NextRequest) {
     // ── Build the shared filter (everything EXCEPT the status tab) ──
     const AND: Record<string, unknown>[] = [];
     // The cutover hides the pre-console backlog so it can't distort the queue.
-    // WAITLIST is exempt: it is a hand-checked list of people who really are
-    // owed stock (some since April), so it must stay visible however old it
-    // is. Everything else still respects the cutover, and the agent's own
-    // from/to filters below still apply to waitlist rows too.
+    //
+    // Three ways an order earns its place on the board:
+    //  1. WAITLIST — a hand-checked list of people genuinely owed stock (some
+    //     since April), so it stays visible however old it is.
+    //  2. An agent has already worked it (assignedAgentId is stamped by the
+    //     PATCH handler on the first status change). WITHOUT THIS, working the
+    //     waitlist destroyed the order: the moment the agent moved an April
+    //     order off WAITLIST — confirmed it, marked "ما جاوبش", anything — it
+    //     lost rule 1, fell behind the cutover, and vanished from every tab
+    //     including "all". She could see it in the admin but could never touch
+    //     it again. Once the console owns an order it owns it for good.
+    //  3. It was placed after the cutover (the normal, everyday case).
+    //
+    // The untouched pre-console archive (555 HANDLED + old junk) has no
+    // assigned agent, so it stays hidden exactly as before.
     if (cutoverAt && !isNaN(cutoverAt.getTime())) {
-      AND.push({ OR: [{ status: "WAITLIST" }, { createdAt: { gte: cutoverAt } }] });
+      AND.push({
+        OR: [
+          { status: "WAITLIST" },
+          { assignedAgentId: { not: null } },
+          { createdAt: { gte: cutoverAt } },
+        ],
+      });
     }
     if (wilaya) AND.push({ wilayaCode: wilaya });
     if (deliveryType === "HOME" || deliveryType === "OFFICE") AND.push({ deliveryType });
