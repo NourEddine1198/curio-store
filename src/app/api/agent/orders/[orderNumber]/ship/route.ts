@@ -26,8 +26,21 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: "لازم الطلب يكون مأكد قبل ما تبعثو لإيكوتراك" }, { status: 400 });
     }
 
+    const agentRow = await db.agent.findUnique({ where: { id: agent.id }, select: { name: true } });
+    const agentName = agentRow?.name || "agent";
+
     const result = await createParcel(order);
     if (!result.success) {
+      // Record the refusal on the timeline. Without this line a parcel Ecotrack
+      // REFUSED looked exactly like a parcel nobody ever tried to send — the
+      // order just sat in مأكد with no trace, which is how 7 of them went
+      // unnoticed for a day.
+      await db.orderEvent.create({
+        data: {
+          orderId: order.id, kind: "system", actor: agentName,
+          note: `فشل الإرسال لإيكوتراك — ${result.error || "سبب غير معروف"}`,
+        },
+      });
       return NextResponse.json({ error: result.error || "فشل الإرسال لإيكوتراك", rawResponse: result.rawResponse }, { status: 502 });
     }
 
@@ -36,10 +49,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     updateData.webhookPayload = result.rawResponse as never;
 
     await db.order.update({ where: { orderNumber: num }, data: updateData });
-    const agentRow = await db.agent.findUnique({ where: { id: agent.id }, select: { name: true } });
     await db.orderEvent.create({
       data: {
-        orderId: order.id, kind: "status", status: "SHIPPED", actor: agentRow?.name || "agent",
+        orderId: order.id, kind: "status", status: "SHIPPED", actor: agentName,
         note: result.trackingCode ? `إيكوتراك — ${result.trackingCode}` : "إيكوتراك",
       },
     });

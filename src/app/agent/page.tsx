@@ -168,9 +168,17 @@ export default function AgentBoard() {
     fetch("/api/delivery", { cache: "no-store" }).then((r) => r.json()).then((d) => {
       if (d?.wilayas) setWilayas(d.wilayas.map((w: { code: number; ar: string }) => ({ code: w.code, ar: w.ar })));
     }).catch(() => {});
-    fetch("/api/products", { cache: "no-store" }).then((r) => r.json()).then((ps) => {
-      if (Array.isArray(ps)) setProducts(ps.map((p: { slug: string; name: string }) => ({ slug: p.slug, name: p.name })));
-    }).catch(() => {});
+    // Agent list, not the public one: retired products (قول بلا متقول, باك
+    // العيد) must stay filterable — legacy orders holding them still need working.
+    fetch("/api/agent/products", { cache: "no-store", headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json()).then((j) => {
+        const ps = j?.products;
+        if (Array.isArray(ps)) {
+          setProducts(ps.map((p: { slug: string; name: string; active: boolean }) => ({
+            slug: p.slug, name: p.active ? p.name : `${p.name} — موقّف`,
+          })));
+        }
+      }).catch(() => {});
   }, [token]);
 
   async function login() {
@@ -213,8 +221,43 @@ export default function AgentBoard() {
     } finally { setBusy(false); }
   }
 
+  // ── مأكد from the board → create the parcel in the same click ──
+  // The board used to only save the status. Ecotrack was reachable ONLY via
+  // the bulk-ship bar at the bottom, which is easy to never notice — so orders
+  // confirmed from here piled up as مأكد with no parcel behind them.
+  async function confirmAndShip(o: OrderRow) {
+    const ok = await postStatus(o, "CONFIRMED");
+    if (!ok) return;
+    // We still ask once. Ecotrack has no cancel endpoint, so a mis-click here
+    // would create a courier parcel we cannot take back.
+    if (!window.confirm(`#${o.orderNumber} تأكد ✓ — نبعثوه لإيكوتراك دركا؟`)) {
+      setErr(`#${o.orderNumber} مأكد لكن مازال ما تبعثش لإيكوتراك — كي تكوني واجدة اضغطي «ابعث لإيكوتراك» في السطر.`);
+      return;
+    }
+    await shipOne(o);
+  }
+
+  async function shipOne(o: OrderRow) {
+    setBusy(true); setErr(""); setToast("");
+    try {
+      const res = await fetch(`/api/agent/orders/${o.orderNumber}/ship`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      const j = await res.json();
+      if (!res.ok) { setErr(`#${o.orderNumber} — ${j.error || "فشل الإرسال لإيكوتراك"}`); return; }
+      setToast(`#${o.orderNumber} تبعث لإيكوتراك ✓ — ${j.trackingCode || "بلا كود تتبع"}`);
+      setTimeout(() => setToast(""), 5000);
+    } catch {
+      setErr(`#${o.orderNumber} — مشكل في الشبكة، ما تبعثش`);
+    } finally {
+      setBusy(false);
+      load(token, { silent: true });
+    }
+  }
+
   function onStatusPick(o: OrderRow, next: string) {
     if (next === o.status) return;
+    if (next === "CONFIRMED") { confirmAndShip(o); return; }
     if (next === "CALLBACK") {
       const d = new Date(Date.now() + 3 * 3600000);
       d.setMinutes(0, 0, 0);
@@ -503,6 +546,14 @@ export default function AgentBoard() {
                       )}
                       {o.status === "CANCELLED" && o.cancelReason && <div className="ab-dim">{o.cancelReason}</div>}
                       {o.status === "EXPIRED" && <div className="ab-dim">{o.callAttempts} محاولات</div>}
+                      {/* A confirmed order with no tracking code has NO parcel at
+                          Ecotrack. Say so on the row and make the rescue one click. */}
+                      {o.status === "CONFIRMED" && !o.trackingCode && (
+                        <>
+                          <div className="ab-nosend">ما تبعثش لإيكوتراك</div>
+                          <button className="ab-mini ab-mini-blue" disabled={busy} onClick={() => shipOne(o)}>ابعث لإيكوتراك</button>
+                        </>
+                      )}
                     </td>
                     <td data-l="أعمال">
                       <div className="ab-actions">
@@ -695,6 +746,8 @@ const styles = `
   .ab-status-fixed{text-align:center;cursor:default}
   .ab-mini{display:inline-block;background:#fff;border:2px solid var(--ink);border-radius:8px;padding:5px 9px;font-size:.74rem;font-weight:800;cursor:pointer;margin-top:6px;text-decoration:none;color:var(--ink);white-space:nowrap}
   .ab-mini-red{background:#dc2626;color:#fff;width:100%;text-align:center}
+  .ab-mini-blue{background:#2aa9e0;color:#fff;width:100%;text-align:center}
+  .ab-nosend{margin-top:6px;font-size:.72rem;font-weight:800;color:#b91c1c}
   .ab-rel{position:relative}
   .ab-badge{position:absolute;top:-8px;left:-7px;background:#dc2626;color:#fff;border-radius:999px;font-size:.62rem;padding:1px 6px;font-weight:800}
   .ab-cb{font-size:.76rem;font-weight:700;margin-top:6px;background:#f3e8ff;border:1.5px solid #8b5cf6;border-radius:8px;padding:4px 8px}

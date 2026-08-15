@@ -28,6 +28,7 @@ type Item = { slug: string; quantity: number; name: string; unitPrice: number };
 type Wilaya = { code: number; ar: string; home: number | null; stopdesk: number | null; communes: { name: string; desk: boolean }[] };
 type EventRow = { id: string; kind: string; status: string | null; note: string | null; actor: string; createdAt: string };
 type PrevOrder = { orderNumber: number; status: string; total: number; createdAt: string };
+type CatalogProduct = { slug: string; name: string; price: number; active: boolean };
 
 const meta = (s: string) => STATUS_META[s as StatusKey] || { ar: s, color: "#888" };
 const fmtDT = (s: string | null) => {
@@ -47,6 +48,9 @@ export default function AgentOrder() {
   const [cancelReasons, setCancelReasons] = useState<string[]>([]);
   const [wilayas, setWilayas] = useState<Wilaya[]>([]);
   const [priceMap, setPriceMap] = useState<Record<string, number>>({});
+  // The full catalog INCLUDING retired products, so an order holding a
+  // discontinued game can still be edited and put back together.
+  const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
@@ -137,12 +141,17 @@ export default function AgentOrder() {
     load(token);
     // catalog prices + wilaya/commune options — retry (no-store) so a slow/dropped
     // request at open doesn't leave the editor without delivery data.
-    const getJSON = (u: string, n: number): Promise<unknown> =>
-      fetch(u, { cache: "no-store" }).then((r) => { if (!r.ok) throw 0; return r.json(); })
-        .catch(() => (n > 0 ? new Promise((z) => setTimeout(z, 700)).then(() => getJSON(u, n - 1)) : null));
-    getJSON("/api/products", 4).then((ps) => {
+    const getJSON = (u: string, n: number, auth?: boolean): Promise<unknown> =>
+      fetch(u, { cache: "no-store", headers: auth ? { Authorization: `Bearer ${token}` } : undefined })
+        .then((r) => { if (!r.ok) throw 0; return r.json(); })
+        .catch(() => (n > 0 ? new Promise((z) => setTimeout(z, 700)).then(() => getJSON(u, n - 1, auth)) : null));
+    // The agent list, not the public one — it still carries retired products
+    // (قول بلا متقول, باك العيد) which live inside real orders she has to edit.
+    getJSON("/api/agent/products", 4, true).then((j) => {
+      const ps = (j as { products?: CatalogProduct[] })?.products;
       if (!Array.isArray(ps)) return;
-      setPriceMap((prev) => { const m = { ...prev }; (ps as { slug: string; price: number }[]).forEach((p) => (m[p.slug] = p.price)); return m; });
+      setCatalog(ps);
+      setPriceMap((prev) => { const m = { ...prev }; ps.forEach((p) => (m[p.slug] = p.price)); return m; });
     });
     getJSON("/api/delivery", 4).then((d) => { if (d && (d as { wilayas?: unknown[] }).wilayas) setWilayas((d as { wilayas: Wilaya[] }).wilayas); });
   }, [token, load]);
@@ -196,8 +205,10 @@ export default function AgentOrder() {
   function removeItem(slug: string) { setItems((its) => its.filter((i) => i.slug !== slug)); dropTotalOverride(); touch(); }
   function addItem(slug: string) {
     if (!slug || items.some((i) => i.slug === slug)) return;
-    const name = ({ roubla: "روبلة", dlala: "دلالة", "goul-bla-matgoul": "قول بلا متقول", "roubla-dlala-pack": "باك روبلة+دلالة", "eid-2026-bundle": "باك العيد" } as Record<string, string>)[slug] || slug;
-    setItems((its) => [...its, { slug, quantity: 1, name, unitPrice: priceMap[slug] || 0 }]);
+    // Names come from the catalog now — the old hardcoded map went stale every
+    // time a product was added or renamed.
+    const p = catalog.find((c) => c.slug === slug);
+    setItems((its) => [...its, { slug, quantity: 1, name: p?.name || slug, unitPrice: p?.price ?? priceMap[slug] ?? 0 }]);
     dropTotalOverride(); touch();
   }
   // Moving the parcel to a different wilaya / delivery type resets the fee to
@@ -300,7 +311,10 @@ export default function AgentOrder() {
     if (dirty.current) { dirty.current = false; const ok = await saveEdit(); if (!ok) return; }
     const ok = await postStatus("CONFIRMED");
     if (!ok) return;
-    if (window.confirm("تبعثي هذا الطلب لإيكوتراك دركا؟")) await ship();
+    // One question, not two: ship() used to ask the SAME thing again, and
+    // cancelling that second popup left the order confirmed but never sent.
+    if (window.confirm("تبعثي هذا الطلب لإيكوتراك دركا؟")) await doShip();
+    else setMsg("تأكد ✓ — لكن مازال ما تبعثش لإيكوتراك. كي تكوني واجدة اضغطي «ابعث لإيكوتراك».");
   }
 
   function openCallback() {
@@ -334,8 +348,14 @@ export default function AgentOrder() {
     } finally { setBusy(false); }
   }
 
+  // The standalone «ابعث لإيكوتراك» button asks first; confirmOrder has
+  // already asked, so it calls doShip directly.
   async function ship() {
     if (!confirm("تبعثي هذا الطلب لإيكوتراك؟")) return;
+    await doShip();
+  }
+
+  async function doShip() {
     setBusy(true); setError(""); setMsg("");
     try {
       const res = await fetch(`/api/agent/orders/${orderNumber}/ship`, {
@@ -449,9 +469,14 @@ export default function AgentOrder() {
                 </div>
               );
             })}
+            {/* Retired products stay in the list — orders still hold them — but
+                they are marked «موقّف» so nobody sells a discontinued game on a
+                fresh order without meaning to. */}
             <select className="ao-add" value="" onChange={(e) => addItem(e.target.value)} disabled={postShip}>
               <option value="">+ زيدي منتج…</option>
-              {Object.keys(priceMap).filter((s) => !items.some((i) => i.slug === s)).map((s) => <option key={s} value={s}>{s}</option>)}
+              {catalog.filter((p) => !items.some((i) => i.slug === p.slug)).map((p) => (
+                <option key={p.slug} value={p.slug}>{p.name}{p.active ? "" : " — موقّف"}</option>
+              ))}
             </select>
           </section>
 
@@ -520,7 +545,7 @@ export default function AgentOrder() {
           )}
 
           {canShip && (
-            <button className="ao-ship" disabled={busy} onClick={ship}>ابعث لإيكوتراك</button>
+            <button className="ao-ship" disabled={busy} onClick={() => ship()}>ابعث لإيكوتراك</button>
           )}
 
           {/* ── timeline ── */}

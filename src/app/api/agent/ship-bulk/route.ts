@@ -44,7 +44,18 @@ export async function POST(request: NextRequest) {
       if (order.trackingCode) { results.push({ orderNumber: num, ok: false, error: "عندو كود تتبع من قبل" }); continue; }
 
       const r = await createParcel(order);
-      if (!r.success) { results.push({ orderNumber: num, ok: false, error: r.error || "فشل" }); continue; }
+      if (!r.success) {
+        // Same reason as the single-order route: a refusal has to leave a mark,
+        // otherwise "Ecotrack said no" is indistinguishable from "nobody tried".
+        await db.orderEvent.create({
+          data: {
+            orderId: order.id, kind: "system", actor: agentName,
+            note: `فشل الإرسال لإيكوتراك — ${r.error || "سبب غير معروف"}`,
+          },
+        });
+        results.push({ orderNumber: num, ok: false, error: r.error || "فشل" });
+        continue;
+      }
 
       const data: Record<string, unknown> = { status: "SHIPPED", shippedAt: new Date() };
       if (r.trackingCode) data.trackingCode = r.trackingCode;
