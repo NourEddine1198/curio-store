@@ -10,6 +10,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TAB_ORDER, STATUS_META, AGENT_SET_STATUSES, POST_SHIP_STATUSES, MAX_CALL_ATTEMPTS, type StatusKey } from "@/lib/order-status";
+import SuiviBoard from "./SuiviBoard";
+
+// The follow-up board is a view, not a status — parcels already in the air,
+// grouped by what has gone wrong. Kept out of TAB_ORDER so it can't be
+// mistaken for something an agent sets on an order.
+const SUIVI_TAB = "SUIVI";
 
 const TOKEN_KEY = "curio-agent-token";
 const NAME_KEY = "curio-agent-name";
@@ -111,7 +117,10 @@ export default function AgentBoard() {
 
   const buildQuery = useCallback(() => {
     const sp = new URLSearchParams();
-    sp.set("status", tab);
+    // SUIVI is a view, not a status. Ask for "all" so the other tabs keep
+    // their live counts while the follow-up board is open — querying an
+    // unknown status would blank every badge.
+    sp.set("status", tab === SUIVI_TAB ? "all" : tab);
     if (q) sp.set("q", q);
     sp.set("page", String(page));
     if (fWilaya) sp.set("wilaya", fWilaya);
@@ -443,6 +452,12 @@ export default function AgentBoard() {
         <button className={`ab-tab ${tab === "all" ? "on" : ""}`} style={tab === "all" ? { background: "#161310", color: "#fff" } : undefined} onClick={() => switchTab("all")}>
           الكل{counts.ALL ? <span className="ab-count">{counts.ALL}</span> : null}
         </button>
+        <button className={`ab-tab ${tab === SUIVI_TAB ? "on" : ""}`}
+          style={tab === SUIVI_TAB ? { background: "#0f766e", color: "#fff", borderColor: "#0f766e" } : undefined}
+          onClick={() => switchTab(SUIVI_TAB)}>
+          <i className="ab-dot" style={{ background: "#0f766e" }} />
+          المتابعة
+        </button>
         {TAB_ORDER.map((s) => {
           const m = meta(s);
           const c = counts[s] || 0;
@@ -459,10 +474,15 @@ export default function AgentBoard() {
         })}
       </div>
 
-      {loading && <div className="ab-info">يحمّل…</div>}
-      {!loading && orders.length === 0 && <div className="ab-info">ماكانش طلبات هنا</div>}
+      {/* The follow-up board replaces the orders table — it reads its own
+          endpoint (cached parcels) and has nothing to do with the status
+          tabs' pagination, filters or bulk selection. */}
+      {tab === SUIVI_TAB && <SuiviBoard token={token} />}
 
-      {!loading && orders.length > 0 && (
+      {tab !== SUIVI_TAB && loading && <div className="ab-info">يحمّل…</div>}
+      {tab !== SUIVI_TAB && !loading && orders.length === 0 && <div className="ab-info">ماكانش طلبات هنا</div>}
+
+      {tab !== SUIVI_TAB && !loading && orders.length > 0 && (
         <div className="ab-tablewrap">
           <table className="ab-table">
             <thead>
@@ -572,7 +592,7 @@ export default function AgentBoard() {
         </div>
       )}
 
-      {!loading && pages > 1 && (
+      {tab !== SUIVI_TAB && !loading && pages > 1 && (
         <div className="ab-pager">
           <button className="ab-ghost" disabled={page <= 1} onClick={() => setPage((p2) => p2 - 1)}>السابق</button>
           <span>صفحة {page} من {pages} — {total} طلب</span>

@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { STATUS_META, POST_SHIP_STATUSES, MAX_CALL_ATTEMPTS, type StatusKey } from "@/lib/order-status";
+import SuiviPanel, { type Parcel } from "./SuiviPanel";
 
 const TOKEN_KEY = "curio-agent-token";
 const DA = (n: number) => (n || 0).toLocaleString("en") + " دج";
@@ -54,6 +55,10 @@ export default function AgentOrder() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+
+  // ── suivi (phase 2) — Ecotrack's side of the parcel ──
+  const [parcel, setParcel] = useState<Parcel | null>(null);
+  const [parcelNote, setParcelNote] = useState("");
 
   // status modals
   const [showCallback, setShowCallback] = useState(false);
@@ -134,7 +139,93 @@ export default function AgentOrder() {
     hydrate(j.order);
     setPrevOrders(j.prevOrders || []);
     if (Array.isArray(j.cancelReasons)) setCancelReasons(j.cancelReasons);
+
+    // Once a parcel exists the follow-up view is the point of this screen,
+    // so pull the cached Ecotrack side straight away. Cached = instant; a
+    // failure here must not blank the order itself.
+    if (j.order?.trackingCode) {
+      fetch(`/api/agent/orders/${orderNumber}/parcel`, {
+        headers: { Authorization: `Bearer ${tok}` }, cache: "no-store",
+      })
+        .then((r) => r.json())
+        .then((p) => {
+          setParcel(p?.parcel || null);
+          setParcelNote(p?.parcel ? "" : p?.reason === "not_synced_yet"
+            ? "مازال ما تزامنش مع إيكوتراك — اضغطي «حدّث»." : "");
+        })
+        .catch(() => {});
+    } else {
+      setParcel(null);
+    }
   }, [orderNumber, hydrate]);
+
+  // Force a live re-read of just this parcel (she's on the phone and needs now).
+  const refreshParcel = useCallback(async () => {
+    setBusy(true); setError(""); setMsg("");
+    try {
+      const res = await fetch(`/api/agent/orders/${orderNumber}/parcel`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      const j = await res.json();
+      if (!res.ok) { setError(j.error || "فشل تحديث التتبع"); return; }
+      setParcel(j.parcel); setParcelNote("");
+      if (j.throttled) setMsg("التتبع تحدّث توّ — هذي آخر معلومة.");
+    } catch { setError("مشكل في الشبكة"); }
+    finally { setBusy(false); }
+  }, [orderNumber, token]);
+
+  // «اطلبي الإرجاع» — stop the retries, bring the box home.
+  const askReturn = useCallback(async () => {
+    const why = window.prompt("علاش تطلبي الإرجاع؟ (اختياري — يتسجّل في التاريخ)");
+    if (why === null) return; // cancelled
+    if (!window.confirm("تأكدي: نطلبو من إيكوتراك يرجّعو الكولي. ما نجموش نلغيو هذا الطلب بعد.")) return;
+    setBusy(true); setError(""); setMsg("");
+    try {
+      const res = await fetch(`/api/agent/orders/${orderNumber}/parcel-return`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: why }),
+      });
+      const j = await res.json();
+      if (!res.ok) { setError(j.error || "فشل طلب الإرجاع"); return; }
+      setMsg("طلب الإرجاع تبعث لإيكوتراك ✓ — الحالة تتبدل وحدها كي يرفدوه.");
+      await load(token);
+    } catch { setError("مشكل في الشبكة"); }
+    finally { setBusy(false); }
+  }, [orderNumber, token, load]);
+
+  // «بدّلي المبلغ / العنوان» — fix a parcel already at Ecotrack.
+  const fixParcel = useCallback(async () => {
+    if (!parcel) return;
+    const orderTotalNow = (order?.total as number) || 0;
+    // Default to OUR total, never Ecotrack's. The only reason to open this is
+    // the mismatch banner, and pre-filling the courier's figure meant a plain
+    // Enter rewrote our books to match the wrong number — the exact drift this
+    // button exists to correct.
+    const raw = window.prompt(
+      `المبلغ لي يحصّلو إيكوتراك (دج).\nإيكوتراك دركا: ${parcel.montant} — عندنا: ${orderTotalNow}`,
+      String(orderTotalNow || parcel.montant || "")
+    );
+    if (raw === null) return;
+    const montant = Math.round(Number(raw));
+    if (!isFinite(montant) || montant <= 0) { setError("المبلغ ماشي صحيح"); return; }
+    const adresse = window.prompt("العنوان (خلّيه كيما هو إذا ما تبدّلش)", "") || "";
+    if (!window.confirm(`نبدّلو الكولي في إيكوتراك:\nالمبلغ → ${montant} دج${adresse ? `\nالعنوان → ${adresse}` : ""}`)) return;
+    setBusy(true); setError(""); setMsg("");
+    try {
+      const res = await fetch(`/api/agent/orders/${orderNumber}/parcel-edit`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ montant, ...(adresse.trim() ? { adresse: adresse.trim() } : {}) }),
+      });
+      const j = await res.json();
+      if (!res.ok) { setError(j.error || "فشل التعديل"); return; }
+      setMsg(`الكولي تعدّل ✓${j.changes?.length ? ` — ${j.changes.join(" · ")}` : ""}`);
+      await load(token);
+      await refreshParcel();
+    } catch { setError("مشكل في الشبكة"); }
+    finally { setBusy(false); }
+  }, [orderNumber, token, parcel, order, load, refreshParcel]);
 
   useEffect(() => {
     if (!token) return;
@@ -541,6 +632,32 @@ export default function AgentOrder() {
             <div className="ao-postship">
               الطلب راه عند الموصّل — الحالة تتبدل وحدها من إيكوتراك.
               تقدري تزيدي تعليق تحت، و«فشل التسليم» معناها لازم تعيطي للزبون.
+            </div>
+          )}
+
+          {/* ── suivi: the parcel's life at Ecotrack ──
+              Post-ship, this IS the screen. It goes above everything else so
+              the agent lands on the journey and the comment thread rather than
+              on the pre-ship editing fields she no longer needs. */}
+          {postShip && parcel && (
+            <SuiviPanel
+              parcel={parcel}
+              events={events}
+              busy={busy}
+              orderTotal={(order?.total as number) || 0}
+              onRefresh={refreshParcel}
+              onAskReturn={askReturn}
+              onFixAmount={fixParcel}
+            />
+          )}
+          {postShip && !parcel && (
+            <div className="ao-postship">
+              {parcelNote || "ما عندناش معلومات التتبع لهذا الطلب."}
+              {(order?.trackingCode as string) && (
+                <button className="ao-linkbtn" style={{ marginRight: 8 }} disabled={busy} onClick={refreshParcel}>
+                  حدّث من إيكوتراك
+                </button>
+              )}
             </div>
           )}
 

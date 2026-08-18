@@ -93,6 +93,7 @@ model Order {
 
   items           OrderItem[]
   events          OrderEvent[]
+  parcel          ParcelTracking?
 
   @@index([status])
   @@index([customerPhone])
@@ -169,6 +170,61 @@ model OrderEvent {
 
   @@index([orderId, createdAt])
   @@index([kind, createdAt])
+}
+
+// ─── Suivi cache — Ecotrack's side of a parcel's life ───────
+// Phase 2 of the console. Once a parcel exists, the interesting
+// facts live at Ecotrack, not here: where the box is, who is
+// driving it, what the driver/station/we said about it.
+//
+// The cron mirrors that into this table so the agent's «فتح»
+// screen opens instantly instead of waiting on Ecotrack, and so
+// the Suivi board can QUERY the delivery trouble (you cannot
+// filter a board on data that only exists in someone else's API).
+//
+// Nothing here is authoritative — it is a copy, refreshed on a
+// schedule. `syncedAt` says how stale it is.
+model ParcelTracking {
+  id             String    @id @default(cuid())
+  trackingCode   String    @unique
+  orderId        String?   @unique
+  order          Order?    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  status         String    @default("")   // Ecotrack's French display status
+  globalStatus   String    @default("")   // livre | retour | en_process
+  currentStation String?                  // where the box is sitting right now
+  driverName     String?
+  driverPhone    String?                  // the delivery guy — agent calls him
+  stopDesk       Boolean?
+  montant        Int       @default(0)    // what the courier will COLLECT
+  tarifLivraison Int       @default(0)    // what Ecotrack charges to deliver
+  tarifRetour    Int       @default(0)    // …and to bring it back
+
+  // [{ date, time, status, station }] — the parcel's journey
+  activity       Json      @default("[]")
+  // [{ at, reason, text, station, driver, by }] — the 3-way thread
+  comments       Json      @default("[]")
+
+  // SORT KEYS AND THRESHOLDS ONLY — do not render these.
+  // The PrismaNeonHttp adapter writes a Date using the PROCESS's local
+  // time, so a sync run outside UTC stores them shifted by that offset
+  // (verified: 12:00:00Z stored as 13:00:00 from a UTC+1 machine).
+  // Netlify runs UTC so production is straight, but the screens read the
+  // raw Algiers-time strings inside `activity` / `comments` instead, which
+  // is both immune to this and what the agent actually wants to see.
+  attemptCount   Int       @default(0)    // failed delivery attempts
+  lastMoveAt     DateTime?                // last activity step
+  lastCommentAt  DateTime?
+  postponedTo    DateTime?                // driver rescheduled to this date
+
+  // Why the Suivi board should surface this parcel.
+  alertLevel     String    @default("ok") // ok | watch | act
+  alertReason    String?                  // Darija, shown on the board row
+
+  syncedAt       DateTime  @default(now())
+
+  @@index([alertLevel, lastMoveAt])
+  @@index([syncedAt])
 }
 
 // ─── Confirmation agents (in-house team, replaces OrderDZ) ──

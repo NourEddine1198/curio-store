@@ -23,5 +23,8 @@ export default async () => {
 };
 
 export const config = {
-  schedule: "14 * * * *", // hourly at :14 (offset avoids top-of-hour crowds)
+  // Every 15 minutes, offset off the hour to avoid top-of-hour crowds.
+  // Was hourly; tightened when the suivi board started feeding off this
+  // run, so a failed delivery surfaces within minutes rather than an hour.
+  schedule: "14,29,44,59 * * * *",
 };

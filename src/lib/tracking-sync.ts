@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { fetchTrackingsInfo, type EcotrackTrackingInfo } from "@/lib/ecotrack";
+import { fetchTrackingsInfo, fetchParcelDetails, type EcotrackTrackingInfo, type ParcelDetail } from "@/lib/ecotrack";
+import { triageParcel } from "@/lib/suivi";
 import { POST_SHIP_ACTIVE, SHIP_RANK, type StatusKey } from "@/lib/order-status";
 
 // ─────────────────────────────────────────────────────────────
@@ -18,6 +19,12 @@ import { POST_SHIP_ACTIVE, SHIP_RANK, type StatusKey } from "@/lib/order-status"
 // ─────────────────────────────────────────────────────────────
 
 const WRITE_CAP = 200;
+// Two separate caps, not one shared budget. A single slice over the
+// concatenated list let the active parcels eat all of it, so once we pass
+// ~250 in flight the delivered ones would never be cached — emptying the
+// "they owe us money" bucket and freezing stale alerts on arrived boxes.
+const ACTIVE_CACHE_CAP = 200;
+const DELIVERED_CACHE_CAP = 80;
 
 // French status → our status. Normalized: lowercase, accents stripped,
 // spaces → underscores. ("Livré non encaissé" → "livre_non_encaisse")
@@ -63,15 +70,95 @@ export interface TrackingSyncReport {
   resolved: number;
   changed: number;
   courierNotes: number;
+  /** parcels whose suivi cache was written (phase 2) */
+  parcelsCached: number;
+  /** parcels the board will flag red */
+  needAction: number;
   byStatus: Record<string, number>;
   unknownStatuses: string[];
   ranAt: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// SUIVI CACHE — mirror Ecotrack's side of each live parcel into
+// ParcelTracking, so «فتح» opens instantly and the Suivi board can
+// actually QUERY delivery trouble instead of asking Ecotrack per row.
+//
+// Runs after the status pass. NOTE: this is a SECOND pass over Ecotrack —
+// it re-hits /get/trackings/info and additionally crawls the paginated list
+// endpoint, so it roughly doubles the run's outbound calls. Kept separate
+// because the status pass must commit even if this half is cut short.
+// Best-effort by design: if this throws, the status sync above has already
+// committed and must not be rolled back by a cache miss.
+// ─────────────────────────────────────────────────────────────
+async function cacheParcels(
+  orders: { id: string; trackingCode: string | null; shippedAt?: Date | null }[],
+  report: TrackingSyncReport
+): Promise<void> {
+  const trackings = orders.map((o) => o.trackingCode!).filter(Boolean);
+  if (!trackings.length) return;
+
+  const res = await fetchParcelDetails(trackings);
+  if (!res.ok) return;
+
+  const byTracking = new Map(orders.map((o) => [o.trackingCode!, o]));
+
+  for (const [tracking, p] of Object.entries(res.parcels) as [string, ParcelDetail][]) {
+    const src = byTracking.get(tracking);
+    const t = triageParcel(p, new Date(), src?.shippedAt ?? null);
+    const data = {
+      orderId: src?.id ?? null,
+      status: p.status,
+      globalStatus: p.globalStatus,
+      currentStation: p.currentStation,
+      driverName: p.driverName,
+      driverPhone: p.driverPhone,
+      stopDesk: p.stopDesk,
+      montant: p.montant,
+      tarifLivraison: p.tarifLivraison,
+      tarifRetour: p.tarifRetour,
+      activity: p.activity as unknown as object,
+      comments: p.comments as unknown as object,
+      attemptCount: t.attemptCount,
+      lastMoveAt: t.lastMoveAt,
+      lastCommentAt: t.lastCommentAt,
+      postponedTo: t.postponedTo,
+      alertLevel: t.level,
+      alertReason: t.reason || null,
+      syncedAt: new Date(),
+    };
+
+    // Read-then-write, never upsert: upsert opens a transaction and the
+    // Neon HTTP driver has none ("Transactions are not supported").
+    // One bad parcel must not abort the batch. `orderId` is @unique, so a
+    // re-shipped order (a second tracking code) makes create throw P2002 —
+    // and an uncaught throw here would stop the cache at the same row on
+    // every future run, silently and forever.
+    try {
+      const existing = await db.parcelTracking.findUnique({ where: { trackingCode: tracking }, select: { id: true } });
+      if (existing) {
+        await db.parcelTracking.update({ where: { id: existing.id }, data });
+      } else {
+        if (data.orderId) {
+          // Release the claim from any older parcel for this order.
+          const stale = await db.parcelTracking.findUnique({ where: { orderId: data.orderId }, select: { id: true } });
+          if (stale) await db.parcelTracking.update({ where: { id: stale.id }, data: { orderId: null } });
+        }
+        await db.parcelTracking.create({ data: { trackingCode: tracking, ...data } });
+      }
+      report.parcelsCached += 1;
+      if (t.level === "act") report.needAction += 1;
+    } catch (err) {
+      console.error(`suivi cache: parcel ${tracking} failed`, err);
+    }
+  }
 }
 
 export async function runTrackingSync(): Promise<TrackingSyncReport> {
   const ranAt = new Date().toISOString();
   const report: TrackingSyncReport = {
     ok: true, scanned: 0, resolved: 0, changed: 0, courierNotes: 0,
+    parcelsCached: 0, needAction: 0,
     byStatus: {}, unknownStatuses: [], ranAt,
   };
 
@@ -89,7 +176,7 @@ export async function runTrackingSync(): Promise<TrackingSyncReport> {
     },
     select: {
       id: true, orderNumber: true, status: true, trackingCode: true,
-      deliveryType: true, deliveredAt: true, returnedAt: true,
+      deliveryType: true, deliveredAt: true, returnedAt: true, shippedAt: true,
     },
     orderBy: { shippedAt: "desc" },
     take: 500,
@@ -155,12 +242,43 @@ export async function runTrackingSync(): Promise<TrackingSyncReport> {
     writes += 1;
   }
 
-  // remember when we last ran (rate-limits the agent's refresh button).
+  // Remember when we last ran (rate-limits the agent's refresh button).
+  // Stamped BEFORE the cache pass on purpose: the cache is the slow half, and
+  // if the function is killed at its 60s ceiling an unwritten stamp would
+  // leave the rate limit permanently disengaged, so every agent click would
+  // relaunch the whole job.
   // NOT an upsert — upsert opens a transaction and the Neon HTTP driver
   // has none ("Transactions are not supported in HTTP mode").
   const stamp = await db.siteSetting.findUnique({ where: { key: "trackingSyncLastRunAt" } });
   if (stamp) await db.siteSetting.update({ where: { key: "trackingSyncLastRunAt" }, data: { value: ranAt } });
   else await db.siteSetting.create({ data: { key: "trackingSyncLastRunAt", value: ranAt } });
+
+  // ── suivi cache (phase 2) ──
+  // Live parcels PLUS recently delivered ones: a delivered parcel still
+  // matters while Ecotrack is holding our cash ("Livre encaissé non payé"),
+  // and it is also the only chance to re-triage a row whose alert would
+  // otherwise stay red forever after the box arrived.
+  // Each group gets its OWN cap — a single shared slice let the active list
+  // eat the whole budget, starving the delivered ones completely.
+  // Best-effort: a failure here must not undo the status work above.
+  try {
+    const recentlyDelivered = await db.order.findMany({
+      where: {
+        status: { in: ["DELIVERED", "RETURNED"] as never },
+        trackingCode: { not: null },
+        shippedAt: { gte: new Date(Date.now() - 45 * 86400000) },
+      },
+      select: { id: true, trackingCode: true, shippedAt: true },
+      orderBy: { shippedAt: "desc" },
+      take: DELIVERED_CACHE_CAP,
+    });
+    await cacheParcels(
+      [...orders.slice(0, ACTIVE_CACHE_CAP), ...recentlyDelivered],
+      report
+    );
+  } catch (err) {
+    console.error("suivi cache failed (status sync unaffected):", err);
+  }
 
   return report;
 }
