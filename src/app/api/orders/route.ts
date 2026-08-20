@@ -48,10 +48,27 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
   },
 };
 
+// ─── Per-unit coupons ───────────────────────────────────
+// Most codes are "X dinars off this order" — a voucher, correctly applied once.
+// A few are really a PRICE CUT on one product. The Dlala warm launch tells past
+// customers «دلالة بـ 1,750 دج بلاصة 2,200», which is a claim about the UNIT
+// price, not about the basket. Until 2026-08-20 the flat discount came off once,
+// so a customer who ordered two copies paid 1,750 for the first and 2,200 for
+// the second (order #762, found and corrected by hand two hours into the blast).
+// Codes listed here scale with the number of units they apply to.
+//
+// Leave a code OUT of this set unless it is advertised as a per-item price.
+// HADIA400 is a gift card and INSTAGRAM is a basket discount — both are right
+// to come off only once.
+const PER_UNIT_COUPONS = new Set<string>(["DLALA-LAUNCH"]);
+
 async function validateCoupon(
   code: string,
   productSlugs: string[]
-): Promise<{ valid: true; discount: number } | { valid: false; error: string }> {
+): Promise<
+  | { valid: true; discount: number; slugs: string[] }
+  | { valid: false; error: string }
+> {
   const coupon = ACTIVE_COUPONS[code];
   if (coupon) {
     if (coupon.expiresAt && new Date() > coupon.expiresAt) {
@@ -63,7 +80,7 @@ async function validateCoupon(
     if (!hasApplicable) {
       return { valid: false, error: "هذا الكود ما يخدمش مع المنتجات لي في السلة" };
     }
-    return { valid: true, discount: coupon.discountAmount };
+    return { valid: true, discount: coupon.discountAmount, slugs: coupon.applicableSlugs };
   }
 
   // Influencer codes live in the DB (managed from /influencers — no redeploys).
@@ -93,7 +110,7 @@ async function validateCoupon(
       };
     }
   }
-  return { valid: true, discount: influencer.customerDiscount };
+  return { valid: true, discount: influencer.customerDiscount, slugs: influencer.applicableSlugs };
 }
 
 function unauthorized() {
@@ -460,6 +477,18 @@ export async function POST(request: NextRequest) {
         return await reject("coupon_rejected", couponResult.error);
       }
       discountAmount = couponResult.discount;
+
+      // A price-cut code scales with quantity (see PER_UNIT_COUPONS above).
+      // An empty slugs list means the code covers everything in the basket.
+      if (discountAmount > 0 && PER_UNIT_COUPONS.has(normalizedCoupon)) {
+        const eligibleUnits = couponResult.slugs.length
+          ? couponResult.slugs.reduce((n, slug) => n + slugQty(slug), 0)
+          : orderItems.reduce((n, it) => n + it.quantity, 0);
+        discountAmount = discountAmount * Math.max(1, eligibleUnits);
+      }
+
+      // Whatever the code says, the customer never gets the goods for free.
+      discountAmount = Math.max(0, Math.min(discountAmount, subtotal - bundleDiscount));
     }
 
     const total = subtotal - bundleDiscount - discountAmount + deliveryPrice;
