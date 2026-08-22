@@ -328,7 +328,34 @@ export async function POST(request: NextRequest) {
       officeCommune,
       couponCode,
       notes,
+      // Traffic source — sent by the site from the URL of the visitor's first
+      // page. Wire names match the URL parameters so nothing has to be renamed
+      // in three places when a tag changes.
+      utm_source,
+      utm_medium,
+      utm_campaign,
+      utm_content,
+      referrer,
     } = body;
+
+    // These come straight off a URL a stranger can type, so treat them as
+    // hostile: strings only, trimmed, length-capped, control characters out.
+    // These arrive on a URL a stranger can type, so treat them as hostile.
+    // Character filter rather than a regex: keeps Arabic and every other
+    // script intact while dropping control characters and the few marks that
+    // cause trouble when this text is later rendered in the console.
+    const cleanTag = (v: unknown, max = 120): string | null => {
+      if (typeof v !== "string") return null;
+      let out = "";
+      for (const ch of v) {
+        const code = ch.charCodeAt(0);
+        if (code < 32 || code === 127) continue;
+        if (ch === "<" || ch === ">" || ch === String.fromCharCode(34) || ch === String.fromCharCode(39)) continue;
+        out += ch;
+      }
+      const s = out.trim().slice(0, max);
+      return s.length ? s : null;
+    };
 
     // --- Validate required fields ---
     if (!customerName || typeof customerName !== "string" || customerName.trim().length < 2) {
@@ -555,6 +582,11 @@ export async function POST(request: NextRequest) {
         couponCode: normalizedCoupon,
         couponDiscount: discountAmount,
         ip: clientIp !== "unknown" ? clientIp : null,
+        utmSource: cleanTag(utm_source, 40),
+        utmMedium: cleanTag(utm_medium, 40),
+        utmCampaign: cleanTag(utm_campaign, 120),
+        utmContent: cleanTag(utm_content, 120),
+        referrer: cleanTag(referrer, 300),
         notes: orderNotes,
       },
     });

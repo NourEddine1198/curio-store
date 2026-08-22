@@ -86,6 +86,19 @@ model Order {
   couponCode      String?                   // normalized UPPERCASE code used at checkout
   couponDiscount  Int         @default(0)   // DA taken off by that code
 
+  // ─── Where this order came from ─────────────────────────────
+  // Read from the URL on the visitor's FIRST page of the visit and held in
+  // sessionStorage until checkout, so someone who lands on /roubla/ and
+  // wanders to /dlala/ before ordering still credits the ad that brought them.
+  // Null for everyone who arrived untagged — organic, direct, the WhatsApp
+  // blast — and that absence is itself the signal: before this existed, ads,
+  // blast and organic could only be told apart by guessing from dates.
+  utmSource       String?                   // "meta"
+  utmMedium       String?                   // "paid"
+  utmCampaign     String?                   // "roubla-test" / Meta campaign name
+  utmContent      String?                   // the Meta ad id, or a slug like "digourdi"
+  referrer        String?     @db.Text      // first off-site referrer, when there is one
+
   notes           String?     @db.Text      // Internal notes
 
   createdAt       DateTime    @default(now())
@@ -102,6 +115,8 @@ model Order {
   @@index([assignedAgentId])
   @@index([nextCallAt])
   @@index([couponCode])
+  @@index([utmCampaign])
+  @@index([utmContent])
 }
 
 // ─── Influencer program ─────────────────────────────────────
