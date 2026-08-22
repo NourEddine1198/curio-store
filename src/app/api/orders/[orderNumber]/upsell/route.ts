@@ -18,6 +18,10 @@ export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const BUNDLE_PAIR_OFF = 800; // must match the value in /api/orders
+// ...and so must this: a campaign code replaces the pair discount rather than
+// stacking with it, so the cross-sell prices the second game the same way the
+// checkout does. Keep in step with CAMPAIGN_PAIR_OFF in /api/orders.
+const CAMPAIGN_PAIR_OFF: Record<string, number> = { "DLALA-LAUNCH": 450 };
 
 function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -67,7 +71,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
                       { slug: target, quantity: 1, unitPrice: product.price }];
     const subtotal = newItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
     const qty = (slug: string) => newItems.reduce((n, i) => (i.slug === slug ? n + i.quantity : n), 0);
-    const bundleDiscount = Math.min(qty("roubla"), qty("dlala")) * BUNDLE_PAIR_OFF;
+    const pairRate = (order.couponCode && CAMPAIGN_PAIR_OFF[order.couponCode] !== undefined)
+      ? CAMPAIGN_PAIR_OFF[order.couponCode]
+      : BUNDLE_PAIR_OFF;
+    const bundleDiscount = Math.min(qty("roubla"), qty("dlala")) * pairRate;
     const total = subtotal - bundleDiscount - (order.couponDiscount || 0) + order.deliveryPrice;
 
     await db.orderItem.create({

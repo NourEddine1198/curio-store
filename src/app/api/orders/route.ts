@@ -62,6 +62,20 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
 // to come off only once.
 const PER_UNIT_COUPONS = new Set<string>(["DLALA-LAUNCH"]);
 
+// ─── Campaign pair pricing ──────────────────────────────
+// A code listed here REPLACES the normal 800 DA pair discount with its own,
+// instead of stacking on top of it. The Dlala warm launch was doing both:
+// 800 off the pair AND 450 off Dlala, so a campaign customer paid 3,350 for
+// two games that are advertised at 3,800 (orders #760 and #792).
+//
+// Nounouti's decision (22 Aug): the campaign gives 450 off EACH game, so the
+// pair is 1,750 + 1,950 = 3,700. Same discount per game as the single, and no
+// double-dipping with the bundle.
+//
+// Only codes named here behave this way. An ordinary pair with no coupon keeps
+// the full 800 off and stays at 3,800.
+const CAMPAIGN_PAIR_OFF: Record<string, number> = { "DLALA-LAUNCH": 450 };
+
 async function validateCoupon(
   code: string,
   productSlugs: string[]
@@ -464,7 +478,7 @@ export async function POST(request: NextRequest) {
         return p?.slug === slug ? n + it.quantity : n;
       }, 0);
     const bundlePairs = Math.min(slugQty("roubla"), slugQty("dlala"));
-    const bundleDiscount = bundlePairs * BUNDLE_PAIR_OFF;
+    let bundleDiscount = bundlePairs * BUNDLE_PAIR_OFF;
 
     // --- Coupon validation (hardcoded legacy codes + DB influencer codes) ---
     let discountAmount = 0;
@@ -485,6 +499,11 @@ export async function POST(request: NextRequest) {
           ? couponResult.slugs.reduce((n, slug) => n + slugQty(slug), 0)
           : orderItems.reduce((n, it) => n + it.quantity, 0);
         discountAmount = discountAmount * Math.max(1, eligibleUnits);
+      }
+
+      // A campaign code sets its own pair rate in place of the usual 800.
+      if (normalizedCoupon in CAMPAIGN_PAIR_OFF) {
+        bundleDiscount = bundlePairs * CAMPAIGN_PAIR_OFF[normalizedCoupon];
       }
 
       // Whatever the code says, the customer never gets the goods for free.
