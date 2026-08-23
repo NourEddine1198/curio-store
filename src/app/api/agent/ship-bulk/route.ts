@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { agentFromRequest } from "@/lib/agent-guard";
+import { agentFromRequest, ownsOrder } from "@/lib/agent-guard";
 import { createParcel } from "@/lib/ecotrack";
 
 // POST /api/agent/ship-bulk { orderNumbers: number[] }
@@ -37,6 +37,7 @@ export async function POST(request: NextRequest) {
         include: { items: { include: { product: { select: { name: true } } } } },
       });
       if (!order) { results.push({ orderNumber: num, ok: false, error: "غير موجود" }); continue; }
+      if (!ownsOrder(agent.id, order)) { results.push({ orderNumber: num, ok: false, error: "ماشي تاعك" }); continue; }
       if (!["CONFIRMED", "PROCESSING"].includes(order.status)) {
         results.push({ orderNumber: num, ok: false, error: "ماشي مأكد" });
         continue;

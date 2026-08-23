@@ -34,10 +34,16 @@ export async function GET(request: NextRequest) {
       { status: { contains: "non pay", mode: "insensitive" as const } },
     ],
   };
+  // Same ownership rule as the confirmation board: a parcel belongs to the
+  // agent who owns its order. Without this, a second agent's Suivi board would
+  // list every parcel in the air — including the driver's phone number for
+  // customers they never spoke to.
+  const MINE = { order: { assignedAgentId: agent.id } };
+
   const where =
     bucket === "money"
-      ? { orderId: { not: null }, ...MONEY_WHERE }
-      : { orderId: { not: null }, alertLevel: bucket === "watch" ? "watch" : "act" };
+      ? { orderId: { not: null }, ...MINE, ...MONEY_WHERE }
+      : { orderId: { not: null }, ...MINE, alertLevel: bucket === "watch" ? "watch" : "act" };
 
   try {
     const parcels = await db.parcelTracking.findMany({
@@ -93,10 +99,10 @@ export async function GET(request: NextRequest) {
     // Aggregated in SQL. This used to pull every cached row into memory on
     // every board load — and the board reloads it on each tab switch.
     const [actCount, watchCount, moneyAgg] = await Promise.all([
-      db.parcelTracking.count({ where: { alertLevel: "act", orderId: { not: null } } }),
-      db.parcelTracking.count({ where: { alertLevel: "watch", orderId: { not: null } } }),
+      db.parcelTracking.count({ where: { alertLevel: "act", orderId: { not: null }, ...MINE } }),
+      db.parcelTracking.count({ where: { alertLevel: "watch", orderId: { not: null }, ...MINE } }),
       db.parcelTracking.aggregate({
-        where: { orderId: { not: null }, ...MONEY_WHERE },
+        where: { orderId: { not: null }, ...MINE, ...MONEY_WHERE },
         _count: { _all: true },
         _sum: { montant: true },
       }),

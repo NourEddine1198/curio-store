@@ -5,6 +5,7 @@ import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
 import { countCapUses } from "@/lib/influencer-stats";
 import { recordCheckoutFailure, pageFromReferer } from "@/lib/checkout-failures";
 import { signUpsellToken } from "@/lib/upsell-token";
+import { resolveDefaultAgentId } from "@/lib/agent-routing";
 
 // ─── Validation helpers ──────────────────────────────────
 
@@ -215,6 +216,10 @@ export async function GET(request: NextRequest) {
               },
             },
           },
+          // Who is meant to call this customer. The admin table shows it on
+          // every row so the owner can see the split at a glance before moving
+          // orders between agents.
+          assignedAgent: { select: { id: true, name: true } },
         },
         orderBy: { createdAt: "desc" },
         skip,
@@ -593,9 +598,15 @@ export async function POST(request: NextRequest) {
     // used to land in PENDING carrying only a note, which is how ~100 orders
     // hid among the genuinely new ones for three months before anyone
     // noticed. WAITLIST gives them their own tab from the moment they arrive.
+    // Route the order to the default confirmation agent right now, so it lands
+    // in a real person's queue instead of a pool nobody owns. Null (no agent
+    // exists / lookup failed) is survivable — the owner reassigns it in /admin/.
+    const routedAgentId = await resolveDefaultAgentId();
+
     const order = await db.order.create({
       data: {
         status: hasWaitlistItem ? "WAITLIST" : "PENDING",
+        assignedAgentId: routedAgentId,
         customerName: customerName.trim(),
         customerPhone: phone,
         customerPhone2: phone2 || null,

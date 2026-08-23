@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { agentFromRequest } from "@/lib/agent-guard";
+import { agentFromRequest, ownsOrder, notMine } from "@/lib/agent-guard";
 import { POST_SHIP_ACTIVE } from "@/lib/order-status";
 import { updateParcel } from "@/lib/ecotrack";
 
@@ -33,6 +33,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       include: { items: { include: { product: { select: { name: true } } } } },
     });
     if (!order) return NextResponse.json({ error: "الطلب غير موجود" }, { status: 404 });
+    if (!ownsOrder(agent.id, order)) return notMine();
     if (!order.trackingCode) {
       return NextResponse.json({ error: "هذا الطلب ما عندوش كولي في إيكوتراك" }, { status: 400 });
     }

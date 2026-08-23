@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { agentFromRequest } from "@/lib/agent-guard";
+import { agentFromRequest, ownsOrder, notMine } from "@/lib/agent-guard";
 import { fetchParcelDetails } from "@/lib/ecotrack";
 import { triageParcel } from "@/lib/suivi";
 
@@ -21,7 +21,7 @@ const MIN_GAP_MS = 60 * 1000; // one live refresh per parcel per minute
 async function loadOrder(num: number) {
   return db.order.findUnique({
     where: { orderNumber: num },
-    select: { id: true, orderNumber: true, trackingCode: true, status: true, shippedAt: true },
+    select: { id: true, orderNumber: true, trackingCode: true, status: true, shippedAt: true, assignedAgentId: true },
   });
 }
 
@@ -35,6 +35,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   try {
     const order = await loadOrder(num);
     if (!order) return NextResponse.json({ error: "الطلب غير موجود" }, { status: 404 });
+    if (!ownsOrder(agent.id, order)) return notMine();
     if (!order.trackingCode) return NextResponse.json({ parcel: null, reason: "no_tracking" });
 
     const parcel = await db.parcelTracking.findUnique({ where: { trackingCode: order.trackingCode } });
@@ -55,6 +56,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const order = await loadOrder(num);
     if (!order) return NextResponse.json({ error: "الطلب غير موجود" }, { status: 404 });
+    if (!ownsOrder(agent.id, order)) return notMine();
     if (!order.trackingCode) {
       return NextResponse.json({ error: "هذا الطلب مازال ما تبعثش لإيكوتراك" }, { status: 400 });
     }

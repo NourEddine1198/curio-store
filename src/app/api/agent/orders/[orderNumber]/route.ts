@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { agentFromRequest } from "@/lib/agent-guard";
+import { agentFromRequest, ownsOrder, notMine } from "@/lib/agent-guard";
 import { repriceOrder } from "@/lib/order-pricing";
 import {
   AGENT_SET_STATUSES,
@@ -56,6 +56,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   const order = await loadOrder(num);
   if (!order) return NextResponse.json({ error: "الطلب غير موجود" }, { status: 404 });
+  if (!ownsOrder(agent.id, order)) return notMine();
 
   const prevOrders = await db.order.findMany({
     where: { customerPhone: order.customerPhone, orderNumber: { not: num } },
@@ -180,6 +181,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       include: { items: { include: { product: { select: { slug: true } } } } },
     });
     if (!existing) return NextResponse.json({ error: "الطلب غير موجود" }, { status: 404 });
+    if (!ownsOrder(agent.id, existing)) return notMine();
 
     const agentRow = await db.agent.findUnique({ where: { id: agent.id }, select: { name: true } });
     const agentName = agentRow?.name || "agent";

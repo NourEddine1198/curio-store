@@ -79,6 +79,15 @@ export async function GET(request: NextRequest) {
 
     // ── Build the shared filter (everything EXCEPT the status tab) ──
     const AND: Record<string, unknown>[] = [];
+
+    // ── Each agent sees ONLY their own orders ──
+    // New orders are stamped with the default agent at checkout, and the owner
+    // moves individual orders between agents from /admin/. Everything below —
+    // the tab counts, the search, the due-now badge — inherits this scope, so
+    // a second agent joining the team cannot see (or call) somebody else's
+    // customer. The pre-console archive has no agent at all, so it stays
+    // hidden from everyone exactly as before.
+    AND.push({ assignedAgentId: agent.id });
     // The cutover hides the pre-console backlog so it can't distort the queue.
     //
     // Three ways an order earns its place on the board:
@@ -95,6 +104,11 @@ export async function GET(request: NextRequest) {
     //
     // The untouched pre-console archive (555 HANDLED + old junk) has no
     // assigned agent, so it stays hidden exactly as before.
+    //
+    // Since the per-agent scope above already requires an assigned agent,
+    // rule 2 covers every row that reaches here — the clause is kept as the
+    // written record of the rule, and as the guard that still applies if an
+    // order is ever handed back to nobody.
     if (cutoverAt && !isNaN(cutoverAt.getTime())) {
       AND.push({
         OR: [

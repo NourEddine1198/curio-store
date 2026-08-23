@@ -58,6 +58,10 @@ export async function GET(
           shippedAt: true,
           trackingCode: true,
           ip: true,
+          // Which confirmation agent owns this order — the admin's dropdown
+          // reads it to show the current owner before changing it.
+          assignedAgentId: true,
+          assignedAgent: { select: { id: true, name: true } },
         }),
         items: {
           select: {
@@ -111,7 +115,7 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { status, notes, trackingCode, confirmedBy } = body;
+    const { status, notes, trackingCode, confirmedBy, assignedAgentId } = body;
 
     // Find the order first
     const existing = await db.order.findUnique({
@@ -164,6 +168,34 @@ export async function PATCH(
     if (notes !== undefined) updateData.notes = notes;
     if (trackingCode !== undefined) updateData.trackingCode = trackingCode;
 
+    // ── Move the order to a different confirmation agent ──
+    // Orders route themselves to the default agent at checkout; this is the
+    // owner's override for the exceptions ("this one is mine, not hers").
+    // The agent console scopes every board and every action to the assigned
+    // agent, so this single field decides who can see and call this customer.
+    // "" / null hands the order back to nobody — it then shows on no board.
+    let agentMoveNote: string | null = null;
+    if (assignedAgentId !== undefined) {
+      const wantedId = assignedAgentId ? String(assignedAgentId) : null;
+      let wantedName = "بلا عون";
+      if (wantedId) {
+        const target = await db.agent.findUnique({
+          where: { id: wantedId },
+          select: { id: true, name: true, active: true },
+        });
+        if (!target) return NextResponse.json({ error: "العون غير موجود" }, { status: 400 });
+        if (!target.active) return NextResponse.json({ error: "هذا العون موقّف" }, { status: 400 });
+        wantedName = target.name;
+      }
+      if (wantedId !== existing.assignedAgentId) {
+        const prev = existing.assignedAgentId
+          ? await db.agent.findUnique({ where: { id: existing.assignedAgentId }, select: { name: true } })
+          : null;
+        updateData.assignedAgentId = wantedId;
+        agentMoveNote = `تحويل الطلب: ${prev?.name || "بلا عون"} ← ${wantedName}`;
+      }
+    }
+
     // Neon HTTP adapter doesn't support transactions.
     // update() + include = implicit transaction → fails.
     // Split into: update (no include) then findUnique (with include).
@@ -178,6 +210,11 @@ export async function PATCH(
         data: { orderId: existing.id, kind: "status", status: String(updateData.status), actor: "owner" },
       });
     }
+    if (agentMoveNote) {
+      await db.orderEvent.create({
+        data: { orderId: existing.id, kind: "system", note: agentMoveNote, actor: "owner" },
+      });
+    }
 
     const updated = await db.order.findUnique({
       where: { orderNumber: num },
@@ -187,6 +224,7 @@ export async function PATCH(
             product: { select: { name: true, slug: true, nameEn: true } },
           },
         },
+        assignedAgent: { select: { id: true, name: true } },
       },
     });
 
