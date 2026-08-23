@@ -10,6 +10,30 @@ import { signUpsellToken } from "@/lib/upsell-token";
 
 const PHONE_RE = /^0[567]\d{8}$/; // Algerian mobile: 05/06/07 + 8 digits
 
+/**
+ * Bring an Algerian mobile to its canonical `0XXXXXXXXX` form before we judge it.
+ *
+ * People type their own number the way they read it out: with spaces, with the
+ * country code, sometimes both. All of these are the SAME phone —
+ *   "+213557227001", "00213 557 227 001", "213557227001", "557227001",
+ *   "05 57 22 70 01"  →  "0557227001"
+ * — and we used to reject every one of them except the last shape, turning away
+ * real customers at checkout with "the number must start with 05/06/07".
+ *
+ * Returns the canonical string, or the input trimmed when we can't make sense
+ * of it (so PHONE_RE still rejects genuine rubbish rather than us guessing).
+ */
+function normalizeDzPhone(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  let digits = trimmed.replace(/\D/g, "");
+  if (digits.startsWith("00213")) digits = digits.slice(5);
+  else if (digits.startsWith("213")) digits = digits.slice(3);
+  // A bare national number ("557227001") is missing only its leading zero.
+  if (digits.length === 9 && /^[567]/.test(digits)) digits = "0" + digits;
+  return PHONE_RE.test(digits) ? digits : trimmed;
+}
+
 // Admin key — MUST be set in environment. No default = no access.
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
@@ -362,11 +386,17 @@ export async function POST(request: NextRequest) {
       return await reject("name_missing", "الاسم مطلوب (حرفين على الأقل)");
     }
 
-    if (!customerPhone || !PHONE_RE.test(customerPhone)) {
+    // Accept the number however the customer wrote it, then judge the canonical
+    // form. Everything downstream (cooldown check, the saved order, Ecotrack)
+    // uses `phone` / `phone2` so we store one consistent shape.
+    const phone = normalizeDzPhone(customerPhone);
+    const phone2 = normalizeDzPhone(customerPhone2);
+
+    if (!phone || !PHONE_RE.test(phone)) {
       return await reject("phone_invalid", "رقم الهاتف لازم يكون 10 أرقام ويبدا بـ 05 أو 06 أو 07");
     }
 
-    if (customerPhone2 && !PHONE_RE.test(customerPhone2)) {
+    if (customerPhone2 && !PHONE_RE.test(phone2)) {
       return await reject("phone2_invalid", "رقم الهاتف الثاني غير صحيح");
     }
 
@@ -375,7 +405,7 @@ export async function POST(request: NextRequest) {
     const phoneCooldownStart = new Date(Date.now() - PHONE_COOLDOWN_MS);
     const recentOrdersByPhone = await db.order.count({
       where: {
-        customerPhone: customerPhone,
+        customerPhone: phone,
         createdAt: { gte: phoneCooldownStart },
       },
     });
@@ -567,8 +597,8 @@ export async function POST(request: NextRequest) {
       data: {
         status: hasWaitlistItem ? "WAITLIST" : "PENDING",
         customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerPhone2: customerPhone2?.trim() || null,
+        customerPhone: phone,
+        customerPhone2: phone2 || null,
         wilayaCode: normalizedWilayaCode,
         wilayaName: wilaya.name,
         deliveryType,

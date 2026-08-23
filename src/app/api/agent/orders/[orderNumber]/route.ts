@@ -19,6 +19,21 @@ export const fetchCache = "force-no-store";
 
 const PHONE_RE = /^0[567]\d{8}$/;
 
+/**
+ * Same rule the public checkout uses: accept a number written with the country
+ * code or with spaces ("+213 557 22 70 01") and store the canonical
+ * "0557227001". Kept in step with normalizeDzPhone in /api/orders.
+ */
+function normalizeDzPhone(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  let digits = trimmed.replace(/\D/g, "");
+  if (digits.startsWith("00213")) digits = digits.slice(5);
+  else if (digits.startsWith("213")) digits = digits.slice(3);
+  if (digits.length === 9 && /^[567]/.test(digits)) digits = "0" + digits;
+  return PHONE_RE.test(digits) ? digits : trimmed;
+}
+
 async function loadOrder(num: number) {
   return db.order.findUnique({
     where: { orderNumber: num },
@@ -223,7 +238,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           }))
         : existing.items.map((i) => ({ slug: i.product.slug, quantity: i.quantity, unitPrice: i.unitPrice }));
 
-      if (e.customerPhone && !PHONE_RE.test(e.customerPhone)) {
+      const editedPhone = normalizeDzPhone(e.customerPhone);
+      const editedPhone2 = normalizeDzPhone(e.customerPhone2);
+      if (e.customerPhone && !PHONE_RE.test(editedPhone)) {
         return NextResponse.json({ error: "رقم الهاتف غير صحيح" }, { status: 400 });
       }
 
@@ -244,8 +261,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         assignedAgentId: existing.assignedAgentId || agent.id,
       };
       if (e.customerName != null) orderData.customerName = String(e.customerName).trim();
-      if (e.customerPhone != null) orderData.customerPhone = String(e.customerPhone).trim();
-      if (e.customerPhone2 != null) orderData.customerPhone2 = String(e.customerPhone2).trim() || null;
+      if (e.customerPhone != null) orderData.customerPhone = editedPhone;
+      if (e.customerPhone2 != null) orderData.customerPhone2 = editedPhone2 || null;
       if (e.notes != null) orderData.notes = String(e.notes);
       if (deliveryType === "HOME") {
         if (e.commune != null) orderData.commune = String(e.commune).trim();
