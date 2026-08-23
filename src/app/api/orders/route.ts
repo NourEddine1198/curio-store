@@ -273,9 +273,13 @@ export async function POST(request: NextRequest) {
   }
 
   /**
-   * Bot traps answer with a FAKE success, so the customer (or bot) sees no
-   * error at all. Logged as silent so a real person caught by the speed trap
-   * isn't invisible — that would be the same blind spot all over again.
+   * Answer a bot with a FAKE success so it never learns it was blocked.
+   *
+   * ONLY for the honeypot, where a hit is certain: the field is invisible to
+   * humans, so filling it proves you are a script. The speed trap used to come
+   * through here too and it cost us a real customer — see the note there.
+   *
+   * Still logged (silent) so these never become invisible again.
    */
   async function fakeSuccess(reason: string) {
     await recordCheckoutFailure({
@@ -316,14 +320,36 @@ export async function POST(request: NextRequest) {
     }
 
     // ─── SECURITY CHECK 2: Speed trap ───────────────────
-    // Frontend sends a timestamp of when the page loaded.
-    // If the form was submitted in < 3 seconds, it's almost certainly a bot.
+    // Frontend sends a timestamp of when the page loaded. A form filled in
+    // under 3 seconds is almost certainly a bot.
+    //
+    // TWO THINGS THIS GETS WRONG IF WRITTEN NAIVELY, both found on 23 Aug after
+    // a customer sent a screenshot of an order we had no record of:
+    //
+    // 1. `_t` is made on the CUSTOMER'S device, `Date.now()` here is OUR clock.
+    //    A phone running a few minutes fast makes `elapsed` NEGATIVE, which is
+    //    "less than 3 seconds", so a real buyer got treated as a bot. Her phone
+    //    read 01:43 while the server logged 01:40 — she could not have escaped
+    //    it without spending three minutes on the form. A negative elapsed means
+    //    the two clocks disagree, never that a human typed impossibly fast, so
+    //    it is not evidence of anything and we ignore it.
+    //
+    // 2. Answering a suspected bot with a fake success is right for the
+    //    honeypot, where a hit is certain. Here a hit is a guess — and a human
+    //    who guesses wrong is shown a convincing order number for an order that
+    //    was never created, so they wait for a parcel that is not coming. Far
+    //    better to ask them to try again: a person simply resubmits and passes
+    //    (their second attempt is slower), while a bot looping instantly keeps
+    //    hitting the same wall.
     const formLoadedAt = Number(body._t);
-    if (formLoadedAt) {
+    if (Number.isFinite(formLoadedAt) && formLoadedAt > 0) {
       const elapsed = Date.now() - formLoadedAt;
-      if (elapsed < MIN_SUBMIT_TIME_MS) {
-        // Too fast — silent fake success
-        return await fakeSuccess("bot_speed_trap");
+      if (elapsed >= 0 && elapsed < MIN_SUBMIT_TIME_MS) {
+        return await reject(
+          "bot_speed_trap",
+          "ثانية برك... عاود اضغط على الزر باش نأكدو الطلب 🙏",
+          429
+        );
       }
     }
 
