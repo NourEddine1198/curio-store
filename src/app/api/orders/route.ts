@@ -782,21 +782,31 @@ export async function POST(request: NextRequest) {
     // silently drop most events. The call is capped at 2.5s and swallows its
     // own failures, so the worst case is a slightly slower response, never a
     // lost order.
-    try {
-      await sendPurchaseToMeta({
-        orderNumber: order.orderNumber,
-        total: order.total,
-        customerName: order.customerName,
-        customerPhone: order.customerPhone,
-        wilayaName: order.wilayaName,
-        commune: order.commune || order.officeCommune,
-        ip: order.ip,
-        userAgent: order.userAgent,
-        fbc: order.fbc,
-        fbp: order.fbp,
-      });
-    } catch (err) {
-      console.error("[capi] Auto-send failed (order saved anyway):", err);
+    //
+    // A WAITLIST order is NOT a sale and must never be reported as one. It
+    // holds no stock (the decrement below skips it), reserves no unit, and is
+    // really "tell me when it is back". Reporting it would be actively
+    // harmful, not merely inaccurate: stock runs out mid-campaign, Meta keeps
+    // being told the ads convert beautifully, and it pushes more budget at
+    // traffic that cannot be fulfilled. ~101 of these once piled up unnoticed
+    // over three months, so this is not a hypothetical.
+    if (order.status !== "WAITLIST") {
+      try {
+        await sendPurchaseToMeta({
+          orderNumber: order.orderNumber,
+          total: order.total,
+          customerName: order.customerName,
+          customerPhone: order.customerPhone,
+          wilayaName: order.wilayaName,
+          commune: order.commune || order.officeCommune,
+          ip: order.ip,
+          userAgent: order.userAgent,
+          fbc: order.fbc,
+          fbp: order.fbp,
+        });
+      } catch (err) {
+        console.error("[capi] Auto-send failed (order saved anyway):", err);
+      }
     }
 
     // --- Return success ---
