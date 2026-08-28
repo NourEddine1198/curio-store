@@ -99,6 +99,18 @@ model Order {
   utmContent      String?                   // the Meta ad id, or a slug like "digourdi"
   referrer        String?     @db.Text      // first off-site referrer, when there is one
 
+  // ─── Conversions API identifiers ────────────────────────────
+  // Meta matches a server-sent event back to a real person using these. The
+  // browser pixel drops _fbc (which ad they clicked) and _fbp (their browser)
+  // as first-party cookies on curiodz.com; the store API lives on another
+  // domain so they are never sent automatically — the checkout reads them and
+  // posts them alongside the order, the same way it does the utm tags.
+  // Without them the server event still sends, but Meta's match quality drops
+  // sharply and most of the benefit is lost.
+  fbc             String?                   // fb.1.<ts>.<fbclid> — the click
+  fbp             String?                   // fb.1.<ts>.<random> — the browser
+  userAgent       String?     @db.Text      // read from the request headers, not the client
+
   notes           String?     @db.Text      // Internal notes
 
   createdAt       DateTime    @default(now())

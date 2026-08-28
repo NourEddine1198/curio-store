@@ -5,6 +5,7 @@ import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
 import { countCapUses } from "@/lib/influencer-stats";
 import { recordCheckoutFailure, pageFromReferer } from "@/lib/checkout-failures";
 import { signUpsellToken } from "@/lib/upsell-token";
+import { sendPurchaseToMeta } from "@/lib/meta-capi";
 import { resolveDefaultAgentId } from "@/lib/agent-routing";
 
 // ─── Validation helpers ──────────────────────────────────
@@ -391,6 +392,10 @@ export async function POST(request: NextRequest) {
       utm_campaign,
       utm_content,
       referrer,
+      // Meta's own cookies, read from document.cookie by the checkout. The
+      // store API is on another domain so the browser never sends them itself.
+      fbc,
+      fbp,
     } = body;
 
     // These come straight off a URL a stranger can type, so treat them as
@@ -654,6 +659,11 @@ export async function POST(request: NextRequest) {
         utmCampaign: cleanTag(utm_campaign, 120),
         utmContent: cleanTag(utm_content, 120),
         referrer: cleanTag(referrer, 300),
+        fbc: cleanTag(fbc, 255),
+        fbp: cleanTag(fbp, 255),
+        // Taken from the request, never from the client — a browser can claim
+        // to be anything, but Meta wants the string the request actually carried.
+        userAgent: cleanTag(request.headers.get("user-agent"), 400),
         notes: orderNotes,
       },
     });
@@ -758,6 +768,35 @@ export async function POST(request: NextRequest) {
       });
     } catch (err) {
       console.error("[ConfirmiVoice] Auto-send failed (order saved anyway):", err);
+    }
+
+    // --- Tell Meta about the sale, server-side ---
+    // The checkout already fires the browser Purchase with eventID
+    // "order-<n>"; this sends the same event_id so Meta counts ONE sale, not
+    // two. The value is recovering the events that browser script never
+    // manages to send — blocked by iOS tracking prevention, ad blockers, or a
+    // tab closed too quickly — and carrying identifiers a browser never has.
+    //
+    // Deliberately awaited rather than fired and forgotten: on serverless the
+    // process can be frozen the moment the response is returned, which would
+    // silently drop most events. The call is capped at 2.5s and swallows its
+    // own failures, so the worst case is a slightly slower response, never a
+    // lost order.
+    try {
+      await sendPurchaseToMeta({
+        orderNumber: order.orderNumber,
+        total: order.total,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        wilayaName: order.wilayaName,
+        commune: order.commune || order.officeCommune,
+        ip: order.ip,
+        userAgent: order.userAgent,
+        fbc: order.fbc,
+        fbp: order.fbp,
+      });
+    } catch (err) {
+      console.error("[capi] Auto-send failed (order saved anyway):", err);
     }
 
     // --- Return success ---
