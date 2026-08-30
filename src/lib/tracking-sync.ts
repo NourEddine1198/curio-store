@@ -55,11 +55,19 @@ export function mapEcotrackStatus(
     return deliveryType === "OFFICE" ? "AT_STOPDESK" : "OUT_FOR_DELIVERY";
   }
   if (s.startsWith("suspend")) return "DELIVERY_FAILED";
+  // ── The split ──
+  // SHIPPED must mean one thing only: we handed it over and the courier has
+  // not come for it yet. Everything they have ACCEPTED and are moving is
+  // IN_TRANSIT. Collapsing the two hid #728 and #741 — parcels sitting at
+  // "Prêt à expédier" for ten and eleven days, uncollected, looking exactly
+  // like the fourteen made yesterday.
   if (
     s.includes("preparation") || s.includes("preparer") ||
-    s.includes("ramassage") || s.includes("expedier") ||
-    s.startsWith("vers_") || s.includes("hub") || s.includes("stock")
+    s.includes("expedier") || s.includes("ramassage")
   ) return "SHIPPED";
+  if (s.startsWith("vers_") || s.includes("hub") || s.includes("stock") || s.includes("recu_par")) {
+    return "IN_TRANSIT";
+  }
   return null; // unknown — leave the order alone, report it
 }
 

@@ -5,6 +5,7 @@ import { sendToConfirmiVoice } from "@/lib/confirmi-voice";
 import { countCapUses } from "@/lib/influencer-stats";
 import { recordCheckoutFailure, pageFromReferer } from "@/lib/checkout-failures";
 import { signUpsellToken } from "@/lib/upsell-token";
+import { moveStock, availableUnits } from "@/lib/stock";
 import { sendPurchaseToMeta } from "@/lib/meta-capi";
 import { resolveDefaultAgentId } from "@/lib/agent-routing";
 
@@ -526,6 +527,11 @@ export async function POST(request: NextRequest) {
 
     let subtotal = 0;
     const orderItems: { productId: string; quantity: number; unitPrice: number }[] = [];
+    // Built from the RESOLVED product, never from the request body. The
+    // checkout still accepts a legacy productId-only shape, where `item.slug`
+    // is undefined — deriving stock lines from the request there would hand
+    // moveStock a blank slug and take no stock at all.
+    const stockLines: { slug: string; quantity: number }[] = [];
     let hasWaitlistItem = false;
 
     for (const item of items) {
@@ -540,10 +546,15 @@ export async function POST(request: NextRequest) {
       // Stock is only decremented when order is CONFIRMED.
       // This prevents fake orders from draining inventory.
       // When stock = 0, accept as waitlist (for next batch contact).
-      if (product.stock > 0 && qty > product.stock) {
-        return await reject("out_of_stock", `${product.name} — الكمية المطلوبة غير متوفرة (باقي ${product.stock})`);
+      // For a bundle, its own stored stock is meaningless — what can be sold
+      // is whichever component runs out first. Reading the pack's own counter
+      // would happily take an order for a pack when Roubla is finished, which
+      // is exactly how the 79-person waitlist happened.
+      const available = await availableUnits(product.slug);
+      if (available > 0 && qty > available) {
+        return await reject("out_of_stock", `${product.name} — الكمية المطلوبة غير متوفرة (باقي ${available})`);
       }
-      if (product.stock <= 0) {
+      if (available <= 0) {
         hasWaitlistItem = true;
       }
 
@@ -552,6 +563,7 @@ export async function POST(request: NextRequest) {
         quantity: qty,
         unitPrice: product.price,
       });
+      stockLines.push({ slug: product.slug, quantity: qty });
 
       subtotal += product.price * qty;
     }
@@ -685,12 +697,10 @@ export async function POST(request: NextRequest) {
     // is in RESTOCK_FAMILY). Taking stock here as well would double-count:
     // once now, and again when the agent moves it out of WAITLIST.
     if (!hasWaitlistItem) {
-      for (const item of orderItems) {
-        await db.product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.quantity } },
-        });
-      }
+      // Through moveStock, so a pack takes a Roubla AND a Dlala off the
+      // shelf rather than decrementing a counter for a box that does not
+      // physically exist.
+      await moveStock(stockLines, "take");
     }
 
     // --- Auto-send to OrderDZ for confirmation ---

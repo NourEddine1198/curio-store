@@ -199,6 +199,7 @@ export async function GET(request: NextRequest) {
           case "CONFIRMED":
           case "PROCESSING": stage = "confirmed"; break;
           case "SHIPPED":
+          case "IN_TRANSIT":
           case "OUT_FOR_DELIVERY":
           case "AT_STOPDESK":
           case "DELIVERY_FAILED":

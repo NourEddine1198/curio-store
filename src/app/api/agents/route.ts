@@ -27,7 +27,7 @@ function publicAgent(a: { id: string; name: string; username: string; role: stri
 // pausing them; an agent sitting on 12 unanswered ones is.
 const OPEN_STATUSES = [
   "PENDING", "WAITLIST", "NO_ANSWER", "CALLBACK", "EXPIRED",
-  "CONFIRMED", "PROCESSING", "SHIPPED",
+  "CONFIRMED", "PROCESSING", "SHIPPED", "IN_TRANSIT",
   "OUT_FOR_DELIVERY", "AT_STOPDESK", "DELIVERY_FAILED", "IN_RETURN",
 ] as const;
 

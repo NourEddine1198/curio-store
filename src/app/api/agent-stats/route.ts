@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
       waitlist: waitlistParked,
       working: c("NO_ANSWER") + c("CALLBACK"),
       confirmed: c("CONFIRMED") + c("PROCESSING"),
-      shipped: c("SHIPPED") + c("OUT_FOR_DELIVERY") + c("AT_STOPDESK") + c("DELIVERY_FAILED") + c("IN_RETURN"),
+      shipped: c("SHIPPED") + c("IN_TRANSIT") + c("OUT_FOR_DELIVERY") + c("AT_STOPDESK") + c("DELIVERY_FAILED") + c("IN_RETURN"),
       delivered: c("DELIVERED"),
       returned: c("RETURNED"),
       cancelled: c("CANCELLED") + c("WRONG") + c("DUPLICATE") + c("EXPIRED"),

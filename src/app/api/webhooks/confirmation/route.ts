@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { moveStock, linesFromItems } from "@/lib/stock";
 
 /**
  * WEBHOOK: OrderDZ -> Curio
@@ -125,13 +126,9 @@ export async function POST(request: NextRequest) {
     if (newStatus === "CANCELLED" && order.status !== "CANCELLED") {
       const items = await db.orderItem.findMany({
         where: { orderId: order.id },
+        select: { quantity: true, product: { select: { slug: true } } },
       });
-      for (const item of items) {
-        await db.product.update({
-          where: { id: item.productId },
-          data: { stock: { increment: item.quantity } },
-        });
-      }
+      await moveStock(linesFromItems(items), "restore");
     }
 
     await db.order.update({

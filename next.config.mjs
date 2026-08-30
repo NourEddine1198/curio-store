@@ -15,6 +15,8 @@ const NOINDEX_PATHS = [
   "/products-admin",
   "/team-stats",
   "/dashboard",
+  "/finance",
+  "/analytics",
 ];
 
 const nextConfig = {

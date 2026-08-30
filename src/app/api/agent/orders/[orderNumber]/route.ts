@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { moveStock, linesFromItems, applyLineChange } from "@/lib/stock";
 import { agentFromRequest, ownsOrder, notMine } from "@/lib/agent-guard";
 import { repriceOrder } from "@/lib/order-pricing";
+import { countGames } from "@/lib/product-composition";
 import {
   AGENT_SET_STATUSES,
   POST_SHIP_STATUSES,
@@ -10,7 +12,7 @@ import {
   MAX_CALL_ATTEMPTS,
   RETRY_INTERVAL_MS,
   stockMove,
-  itemStockDelta,
+  holdsStock,
   type StatusKey,
 } from "@/lib/order-status";
 
@@ -152,14 +154,7 @@ async function applyStatus(opts: {
   const move = stockMove(existing.status, finalStatus);
 
   await db.order.update({ where: { id: existing.id }, data });
-  if (move) {
-    for (const it of existing.items) {
-      await db.product.update({
-        where: { id: it.productId },
-        data: { stock: move === "restore" ? { increment: it.quantity } : { decrement: it.quantity } },
-      });
-    }
-  }
+  if (move) await moveStock(linesFromItems(existing.items), move);
   for (const e of events) {
     await db.orderEvent.create({ data: { orderId: existing.id, kind: e.kind, status: e.status, note: e.note, actor: agentName } });
   }
@@ -282,7 +277,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       // we still know what the order used to hold. Editing used to skip this
       // entirely, so changing 2 boxes to 3 shipped a box the system still
       // counted as in stock.
-      const stockDelta = itemStockDelta(existing.status, existing.items, priced.orderItems);
+      // Slug-aware, so swapping a single game for a pack moves the two real
+      // boxes rather than a counter for a box that does not exist.
+      await applyLineChange(
+        existing.status,
+        linesFromItems(existing.items),
+        items.map((i: { slug: string; quantity: number }) => ({ slug: i.slug, quantity: i.quantity })),
+        holdsStock,
+      );
 
       // Replace items, then update the order. The Neon HTTP driver has no
       // transactions, so do it sequentially (edits are rare + agent-driven).
@@ -290,14 +292,56 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       for (const oi of priced.orderItems) {
         await db.orderItem.create({ data: { orderId: existing.id, productId: oi.productId, quantity: oi.quantity, unitPrice: oi.unitPrice } });
       }
-      for (const productId of Object.keys(stockDelta)) {
-        const d = stockDelta[productId];
-        await db.product.update({
-          where: { id: productId },
-          data: { stock: d > 0 ? { decrement: d } : { increment: -d } },
+      await db.order.update({ where: { id: existing.id }, data: orderData });
+
+      // ── Did she sell another game on the phone? ──
+      // This is the ONLY reliable record of a phone upsell. Guessing it from
+      // a price rise does not work: she edits totals down more often than up
+      // (15 times to 9 last month) for discounts and free delivery, and the
+      // website's own «زيد دلالة» button adds a line without her being
+      // involved at all — that one is the customer's doing, not hers, and it
+      // goes through a different endpoint so it never lands here.
+      //
+      // One row per game added, so counting rows counts bonuses. No parsing.
+      // `items` is what the order is becoming — slug + quantity — which is
+      // exactly what the game count needs. (repriceOrder returns product IDs,
+      // not slugs, so count from the request instead.)
+      const gamesBefore = countGames(existing.items);
+      const gamesAfter = countGames(items);
+      const gamesAdded = gamesAfter - gamesBefore;
+
+      if (gamesAdded > 0) {
+        for (let i = 0; i < gamesAdded; i++) {
+          await db.orderEvent.create({
+            data: {
+              orderId: existing.id,
+              kind: "upsell",
+              actor: agentName,
+              note: `زادت لعبة في المكالمة — ولّاو ${gamesAfter} بعد ما كانوا ${gamesBefore}`,
+            },
+          });
+        }
+      }
+
+      // ── The parcel already exists ──
+      // Orders #567 and #605 were edited up to 6,550 DA AFTER their parcel was
+      // created at 5,450. The edit landed in our books; the courier never
+      // heard about it, so the customer was asked for the old amount and the
+      // difference simply evaporated.
+      //
+      // We do not block her — refusing an edit mid-call is worse than a
+      // flagged mismatch — but the order gets a loud line on its timeline, and
+      // /finance already lists every parcel whose amount disagrees with ours.
+      if (existing.trackingCode && priced.total !== existing.total) {
+        await db.orderEvent.create({
+          data: {
+            orderId: existing.id,
+            kind: "system",
+            actor: agentName,
+            note: `⚠️ تبدّل الإجمالي (${existing.total} ← ${priced.total}) و الكولي راه موجود في إيكوتراك. لازم تعدّليه تما تاني، وإلا الليفرور يطلب المبلغ القديم.`,
+          },
         });
       }
-      await db.order.update({ where: { id: existing.id }, data: orderData });
 
       // ── Timeline ──
       // Edits now auto-save about a second after she stops typing, so a naive

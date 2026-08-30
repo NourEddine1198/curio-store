@@ -109,16 +109,67 @@ interface Settings {
 
 const DEFAULT_SETTINGS: Settings = {
   products: {
-    roubla: { label: "Roubla", unitCost: 610, printRun: 2000 },
-    dlala: { label: "Dlala", unitCost: 610, printRun: 1000 },
+    roubla: { label: "Roubla", unitCost: 480, printRun: 2000 },
+    dlala: { label: "Dlala", unitCost: 280, printRun: 2000 },
     origami: { label: "Origami", unitCost: 760, printRun: 3000 },
-    "goul-bla-matgoul": { label: "Goul Bla Matgoul", unitCost: 610, printRun: 0 },
-    "eid-2026-bundle": { label: "Eid Pack", unitCost: 1220, printRun: 0 },
+    "goul-bla-matgoul": { label: "Goul Bla Matgoul", unitCost: 480, printRun: 0 },
+    "eid-2026-bundle": { label: "Eid Pack", unitCost: 960, printRun: 0 },
+    "roubla-dlala-pack": { label: "Roubla + Dlala pack", unitCost: 760, printRun: 0 },
   },
-  defaultUnitCost: 610, wrapping: 30, confirmation: 120, codFee: 0,
-  returnFee: 250, rentPerMonth: 15000, adCostPerOrder: 450, cashOnHand: 0,
+  // Corrected 29 Aug 2026 from the founders' real numbers. The old values
+  // here (wrapping 30, confirmation 120, returnFee 250, rent 15,000) were
+  // June placeholders that had been silently wrong for months — there is
+  // no rent at all. These are now only a fallback: the live values are
+  // pulled from /api/finance/settings below, so every device agrees.
+  defaultUnitCost: 480, wrapping: 140, confirmation: 80, codFee: 0,
+  returnFee: 50, rentPerMonth: 0, adCostPerOrder: 375, cashOnHand: 0,
   adTargetPerSale: 500, reorderDays: 21,
 };
+
+/**
+ * The shared cost rules, straight from the database.
+ *
+ * Why this exists: these numbers used to live only in this browser's
+ * localStorage, so two laptops showed two different profits and a cleared
+ * cache lost the lot. /finance now owns them. Anything saved here that the
+ * database also knows about gets overwritten on load — deliberately.
+ */
+async function applySharedRules(base: Settings, adminKey: string): Promise<Settings> {
+  try {
+    const res = await fetch("/api/finance/settings", { headers: { "X-Admin-Key": adminKey } });
+    if (!res.ok) return base;
+    const rows: { key: string; value: string }[] = (await res.json()).settings || [];
+    const num = (k: string, fb: number) => {
+      const v = rows.find((r) => r.key === k)?.value;
+      const n = v == null ? NaN : Number(v);
+      return Number.isFinite(n) ? n : fb;
+    };
+    // Printing is per product now — Roubla and Dlala genuinely differ.
+    const pRoubla = num("print.roubla", 480);
+    const pDlala = num("print.dlala", 280);
+    const pOther = num("print.default", 480);
+    const unitCostFor = (slug: string) => {
+      if (slug === "roubla") return pRoubla;
+      if (slug === "dlala") return pDlala;
+      if (slug === "roubla-dlala-pack") return pRoubla + pDlala;   // one box, two games
+      if (slug === "eid-2026-bundle") return pRoubla + pOther;     // legacy: Roubla + Goul
+      return pOther;
+    };
+    return {
+      ...base,
+      defaultUnitCost: pOther,
+      wrapping: num("wrap.perOrderBlended", base.wrapping),
+      confirmation: num("confirmation.perOrder", base.confirmation),
+      returnFee: num("return.fee", base.returnFee),
+      rentPerMonth: num("fixed.rentPerMonth", base.rentPerMonth),
+      products: Object.fromEntries(
+        Object.entries(base.products).map(([slug, p]) => [slug, { ...p, unitCost: unitCostFor(slug) }])
+      ),
+    };
+  } catch {
+    return base;
+  }
+}
 
 function loadSettings(): Settings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
@@ -198,6 +249,14 @@ export default function CommandCenter() {
   }, []);
 
   useEffect(() => { if (adminKey) fetchData(adminKey); }, [adminKey, fetchData]);
+
+  // Shared cost rules win over whatever this browser remembered.
+  useEffect(() => {
+    if (!adminKey) return;
+    let cancelled = false;
+    applySharedRules(loadSettings(), adminKey).then((s) => { if (!cancelled) setSettings(s); });
+    return () => { cancelled = true; };
+  }, [adminKey]);
 
   function tryLogin() {
     const key = keyInput.trim(); if (!key) return;
@@ -401,6 +460,15 @@ export default function CommandCenter() {
 
           {/* ───── WAR ROOM ───── */}
           <div className="cc-sect"><span className="cc-badge">The War Room</span><h2>Money truth &amp; moves</h2><span className="cc-when">{cur.label}</span></div>
+
+          {/* This page estimates profit from order counts. /finance works it
+              out from the parcels themselves and from real recorded spending,
+              so where the two differ, /finance is right. */}
+          <div className="cc-note-link">
+            Profit below is an <b>estimate</b> from order counts. For the real one — money the courier
+            still owes you, actual ad spend, and what you&apos;ve really paid out — open{" "}
+            <a href="/finance">Finance →</a>
+          </div>
 
           <div className="cc-truth">
             <div className="cc-tile cc-tile-hero">
@@ -616,6 +684,8 @@ function Style() {
     .cc-bar-r{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
     .cc-btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:10px;padding:7px 12px;font-size:13px;font-weight:700;font-family:var(--body);cursor:pointer;}
     .cc-btn:hover{background:var(--cream2);} .cc-ghost{background:transparent;} .cc-primary{background:var(--gold);border-color:var(--gold);color:#221c0a;} .cc-wfull{width:100%;margin-top:8px;}
+    .cc-note-link{background:var(--goldsoft);border:1px solid var(--amberline);border-radius:12px;padding:11px 15px;margin:0 0 14px;font-size:13px;color:#6f5312;line-height:1.5;}
+    .cc-note-link a{color:var(--amber);font-weight:800;text-decoration:none;} .cc-note-link a:hover{text-decoration:underline;}
     .cc-sect{display:flex;align-items:center;gap:11px;margin:30px 0 14px;} .cc-sect h2{font-size:clamp(18px,2.6vw,23px);} .cc-sect-sm{display:flex;align-items:center;gap:10px;margin:26px 0 12px;} .cc-sect-sm h3{font-size:17px;}
     .cc-badge{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:6px 12px;border-radius:999px;background:var(--goldsoft);color:var(--gold);} .cc-when{margin-left:auto;font-size:12px;color:var(--muted);font-weight:700;background:var(--surface);border:1px solid var(--line);padding:5px 11px;border-radius:999px;}
     .cc-pulse{background:var(--surface);border:1px solid var(--line);border-radius:26px;padding:24px;max-width:380px;box-shadow:0 14px 36px rgba(70,52,15,.09);}

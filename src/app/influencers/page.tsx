@@ -73,6 +73,7 @@ const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
   CONFIRMED: { text: "Confirmed", cls: "s-ok" },
   PROCESSING: { text: "Confirmed", cls: "s-ok" },
   SHIPPED: { text: "Shipped", cls: "s-ship" },
+  IN_TRANSIT: { text: "In transit", cls: "s-ship" },
   OUT_FOR_DELIVERY: { text: "Out for delivery", cls: "s-ship" },
   AT_STOPDESK: { text: "At stop-desk", cls: "s-ship" },
   DELIVERY_FAILED: { text: "Delivery failed", cls: "s-warn" },

@@ -748,3 +748,57 @@ export async function fetchAllEcotrackOrders(maxPages = 60): Promise<EcotrackLis
     return { ok: false, error: `Network error: ${message}`, orders, pages: page - 1, rawRows };
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Pulling a parcel back off Ecotrack.
+//
+// Orders are shipped to Ecotrack automatically the moment they are
+// confirmed. So by the time we decide to hand a box to our own driver
+// instead, a parcel usually already exists — and leaving it there means
+// the courier turns up for a box that is no longer on the shelf, or
+// worse, delivers a second one.
+//
+// ⚠️ Deliberately NOT exposed to the agent console. Only the owner's
+// hand-delivery flow calls this, and only for parcels the courier has
+// not collected yet.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Ecotrack statuses where the box is still sitting with US — created but
+ * not yet picked up. Anything else means the courier physically has it,
+ * and cancelling then would desync their network from reality.
+ */
+export function parcelIsStillOurs(status: string | null | undefined): boolean {
+  const s = (status || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return s.includes("pret a expedier") || s.includes("en preparation") || s.trim() === "";
+}
+
+/** Cancel a parcel outright. Only for parcels the courier has not collected. */
+export async function deleteParcel(
+  tracking: string
+): Promise<{ success: boolean; error?: string }> {
+  const token = process.env.ECOTRACK_TOKEN;
+  if (!token) return { success: false, error: "ECOTRACK_TOKEN is not set" };
+  try {
+    const res = await fetch(`${BASE_URL}/delete/order`, {
+      method: "DELETE",
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ tracking }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const d = data as Record<string, unknown> | null;
+      return { success: false, error: String(d?.message || `Ecotrack error (${res.status})`) };
+    }
+    // Same lesson as /demande/retour: this API answers 200 while refusing.
+    // Require the absence of an explicit failure rather than trusting the
+    // status code alone.
+    const d = (data || {}) as Record<string, unknown>;
+    const failed = String(d.success ?? d.status ?? "").toLowerCase() === "false" ||
+                   String(d.deleted ?? "").toLowerCase() === "fail";
+    if (failed) return { success: false, error: "Ecotrack refused to cancel it" };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: `Network error: ${err instanceof Error ? err.message : "unknown"}` };
+  }
+}

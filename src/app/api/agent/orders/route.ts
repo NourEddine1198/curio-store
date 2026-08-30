@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { moveStock, linesFromItems } from "@/lib/stock";
 import { agentFromRequest } from "@/lib/agent-guard";
 import {
   ALL_STATUSES,
@@ -60,7 +61,7 @@ export async function GET(request: NextRequest) {
           { lastCallAt: null, updatedAt: { lte: expireBefore } },
         ],
       },
-      select: { id: true, orderNumber: true, items: { select: { productId: true, quantity: true } } },
+      select: { id: true, orderNumber: true, items: { select: { quantity: true, product: { select: { slug: true } } } } },
       take: 50,
     });
     for (const o of toExpire) {
@@ -69,9 +70,7 @@ export async function GET(request: NextRequest) {
       const fresh = await db.order.findUnique({ where: { id: o.id }, select: { status: true } });
       if (fresh?.status !== "NO_ANSWER") continue;
       await db.order.update({ where: { id: o.id }, data: { status: "EXPIRED" } });
-      for (const it of o.items) {
-        await db.product.update({ where: { id: it.productId }, data: { stock: { increment: it.quantity } } });
-      }
+      await moveStock(linesFromItems(o.items), "restore");
       await db.orderEvent.create({
         data: { orderId: o.id, kind: "system", status: "EXPIRED", actor: "system", note: "انتهى أوتوماتيك: 3 أيام بلا محاولة جديدة" },
       });

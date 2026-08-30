@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { moveStock, linesFromItems } from "@/lib/stock";
 import { ALL_STATUSES, stockMove } from "@/lib/order-status";
 
 // Admin key — MUST be set in environment. No default = no access.
@@ -155,13 +156,9 @@ export async function PATCH(
       if (move) {
         const items = await db.orderItem.findMany({
           where: { orderId: existing.id },
+          select: { quantity: true, product: { select: { slug: true } } },
         });
-        for (const item of items) {
-          await db.product.update({
-            where: { id: item.productId },
-            data: { stock: move === "restore" ? { increment: item.quantity } : { decrement: item.quantity } },
-          });
-        }
+        await moveStock(linesFromItems(items), move);
       }
     }
 

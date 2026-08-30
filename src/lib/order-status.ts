@@ -14,6 +14,7 @@ export const ALL_STATUSES = [
   "CONFIRMED",
   "PROCESSING",
   "SHIPPED",
+  "IN_TRANSIT",
   "OUT_FOR_DELIVERY",
   "AT_STOPDESK",
   "DELIVERY_FAILED",
@@ -46,6 +47,7 @@ export const AGENT_SET_STATUSES: StatusKey[] = [
 // status by hand — it flows from Ecotrack. She can still comment.
 export const POST_SHIP_STATUSES: StatusKey[] = [
   "SHIPPED",
+  "IN_TRANSIT",
   "OUT_FOR_DELIVERY",
   "AT_STOPDESK",
   "DELIVERY_FAILED",
@@ -57,6 +59,7 @@ export const POST_SHIP_STATUSES: StatusKey[] = [
 // Post-ship statuses that are still "alive" (tracking sync scans these).
 export const POST_SHIP_ACTIVE: StatusKey[] = [
   "SHIPPED",
+  "IN_TRANSIT",
   "OUT_FOR_DELIVERY",
   "AT_STOPDESK",
   "DELIVERY_FAILED",
@@ -129,13 +132,14 @@ export const PENDING_STALE_MS = 24 * 60 * 60 * 1000; // new order untouched 24h 
 // the failure — only a terminal outcome moves it on. Same as OrderDZ.)
 export const SHIP_RANK: Record<string, number> = {
   SHIPPED: 1,
-  OUT_FOR_DELIVERY: 2,
-  AT_STOPDESK: 2,
-  DELIVERY_FAILED: 3,
-  IN_RETURN: 4,
-  DELIVERED: 5,
-  RETURNED: 5,
-  CANCELLED: 5,
+  IN_TRANSIT: 2,
+  OUT_FOR_DELIVERY: 3,
+  AT_STOPDESK: 3,
+  DELIVERY_FAILED: 4,
+  IN_RETURN: 5,
+  DELIVERED: 6,
+  RETURNED: 6,
+  CANCELLED: 6,
 };
 
 // ── Display (Arabic labels + tab colors, no emojis — Windows) ──
@@ -148,6 +152,7 @@ export const STATUS_META: Record<StatusKey, { ar: string; color: string; text?: 
   CONFIRMED: { ar: "مأكد", color: "#22c55e" },
   PROCESSING: { ar: "قيد التحضير", color: "#16a34a" },
   SHIPPED: { ar: "مبعوث", color: "#3b82f6" },
+  IN_TRANSIT: { ar: "في الطريق", color: "#6366f1" },
   OUT_FOR_DELIVERY: { ar: "في التوزيع", color: "#0ea5e9" },
   AT_STOPDESK: { ar: "في المكتب", color: "#06b6d4" },
   DELIVERY_FAILED: { ar: "فشل التسليم", color: "#dc2626" },
@@ -169,6 +174,7 @@ export const TAB_ORDER: StatusKey[] = [
   "CALLBACK",
   "CONFIRMED",
   "SHIPPED",
+  "IN_TRANSIT",
   "OUT_FOR_DELIVERY",
   "AT_STOPDESK",
   "DELIVERY_FAILED",

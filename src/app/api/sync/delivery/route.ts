@@ -26,7 +26,7 @@ export const maxDuration = 60; // seconds (host may cap; page/write caps bound t
 
 const SYNC_SECRET = process.env.SYNC_SECRET;
 const WRITE_CAP = 100; // backlog drains over multiple runs
-const IN_FLIGHT = ["CONFIRMED", "PROCESSING", "SHIPPED"] as const;
+const IN_FLIGHT = ["CONFIRMED", "PROCESSING", "SHIPPED", "IN_TRANSIT"] as const;
 
 let _running = false;
 

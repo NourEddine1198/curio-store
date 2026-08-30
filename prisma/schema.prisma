@@ -70,6 +70,24 @@ model Order {
   cancelReason    String?                    // why it was cancelled (from the reasons list or free text)
 
   shippedAt       DateTime?
+  // Set when a box was handed to our own delivery guy instead of the courier.
+  // It needs to be a real column, not a note we grep: the profit view reads
+  // revenue from Ecotrack parcels, and a hand-delivered order has no parcel —
+  // so without this the sale counts ZERO revenue while the cash quietly
+  // arrives. This is the flag that lets the engine find them.
+  // Set the evening we hand the box to our own driver, cleared only when the
+  // order resolves. While it is set the order is OUT OF THE BUILDING — that is
+  // what stops it also being confirmed and sent to Ecotrack the same night,
+  // which is how a customer ends up with two boxes.
+  handedToDriverAt DateTime?
+  // How many evenings he has come back still holding it. Nobody home means he
+  // keeps it and tries again tomorrow, so a box can ride several runs.
+  driverAttempts  Int       @default(0)
+  handDeliveredAt DateTime?
+  // What the driver was paid for THIS box. Per order, not per batch: the
+  // default is 350 but a far commune or an awkward drop is worth more, and a
+  // single rate would quietly under-pay him or over-charge the profit.
+  handDeliveryFee Int?
   trackingCode    String?                   // Shipping company tracking
   deliveredAt     DateTime?
   returnedAt      DateTime?
@@ -127,6 +145,8 @@ model Order {
   @@index([assignedAgentId])
   @@index([nextCallAt])
   @@index([couponCode])
+  @@index([handDeliveredAt])
+  @@index([handedToDriverAt])
   @@index([utmCampaign])
   @@index([utmContent])
 }
@@ -368,6 +388,155 @@ model SiteSetting {
   updatedAt DateTime @updatedAt
 }
 
+// ════════════════════════════════════════════════════════════
+// FINANCE — the money-control layer (/finance)
+//
+// Two layers, deliberately kept apart:
+//
+//   THE LEDGER   — MoneyMovement. Money that actually moved between
+//                  real accounts. One row per movement. Nothing here
+//                  is derived; every row is a thing that happened.
+//
+//   THE PROFIT   — NOT stored. Computed on every read from orders,
+//                  parcels and FinanceSetting. Derived numbers that
+//                  live in a table go stale the day a rule changes,
+//                  so none of them are written down.
+//
+// Why they differ: the 1.54M print run is ONE cash movement in June
+// and ~385 DA against every box sold for months afterwards. A system
+// that keeps only the first says June was a catastrophe; one that
+// keeps only the second lets you run out of cash while showing a
+// healthy profit.
+//
+// AMOUNTS: dinars are whole numbers (DA has no practical subunit).
+// Euros are stored in CENTS so no float ever touches money.
+// ════════════════════════════════════════════════════════════
+
+// ─── The real accounts money sits in ────────────────────────
+// Rows, not hard-coded constants, so a fourth account (a second
+// courier, a real bank) is a form and not a migration.
+model FinanceAccount {
+  id       String  @id @default(cuid())
+  key      String  @unique          // "cash" | "baridimob" | "bank_eur"
+  name     String                   // shown in the UI
+  currency String  @default("DZD")  // "DZD" | "EUR"
+  sort     Int     @default(0)
+  active   Boolean @default(true)
+
+  movements     MoneyMovement[] @relation("MovementAccount")
+  transfersIn   MoneyMovement[] @relation("MovementToAccount")
+  payouts       CourierPayout[]
+}
+
+// ─── What a movement was for ────────────────────────────────
+// Seeded from the founders' real cost list, editable after. The
+// phone screen renders these as buttons, so the list IS the UI.
+model FinanceCategory {
+  key    String  @id                // "courier_payout", "consumables", ...
+  label  String                     // English label (desk screen)
+  labelAr String?                   // Darija label (phone screen)
+  kind   String                     // "income" | "expense"
+  bucket String  @default("other")  // cogs | shipping | marketing | people | consumables | other
+  // true  = the profit view works this number out itself, from orders and
+  //         parcels. Movements filed here are still real cash and still
+  //         move the ledger — the profit view just ignores them, so paying
+  //         the agent her month in cash cannot double-count against the
+  //         80-per-delivered-order the profit view already charged.
+  //         Every income category is `auto`, because revenue comes from
+  //         parcels; cash arriving is a ledger fact, not a second sale.
+  // false = the profit view SUMS the movements filed here. Costs nothing
+  //         else knows about: a video, a roll of scotch, the ad bill.
+  auto   Boolean @default(false)
+  sort   Int     @default(0)
+  active Boolean @default(true)
+
+  movements MoneyMovement[]
+}
+
+// ─── THE LEDGER ─────────────────────────────────────────────
+model MoneyMovement {
+  id          String   @id @default(cuid())
+  // When the money MOVED — not when it was typed. The two differ every
+  // time something is entered a few days late, and only this one is
+  // right for a monthly total.
+  occurredAt  DateTime
+  direction   String                    // "in" | "out" | "transfer"
+
+  accountId   String                    // in → destination; out/transfer → source
+  account     FinanceAccount @relation("MovementAccount", fields: [accountId], references: [id])
+  toAccountId String?                   // transfer only → destination
+  toAccount   FinanceAccount? @relation("MovementToAccount", fields: [toAccountId], references: [id])
+
+  amount      Int                       // in the account's own currency (EUR = cents)
+  currency    String   @default("DZD")  // copied at write time; the account may be renamed later
+
+  // The reporting number. Stored rather than recomputed because the euro
+  // rate on the day IS a fact — recomputing later at today's rate would
+  // silently rewrite what August cost.
+  amountDzd   Int
+  fxRate      Int?                      // DA per €1, ×100 (28000 = 280.00). Null for dinar rows.
+
+  categoryKey String
+  category    FinanceCategory @relation(fields: [categoryKey], references: [key])
+
+  note        String?  @db.Text
+  payoutId    String?                   // set when this row is a courier payout's cash
+  payout      CourierPayout? @relation(fields: [payoutId], references: [id])
+
+  createdBy   String   @default("owner")
+  createdAt   DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([accountId, occurredAt])
+  @@index([categoryKey, occurredAt])
+}
+
+// ─── One «Décharge de paiement expéditeur» ──────────────────
+// The courier pays in CASH, on request, and hands over a numbered
+// slip. The slip's headline total is the sum of its Net column —
+// already after their delivery fees — so `slipTotal` is what landed
+// in the drawer, NOT what customers paid.
+//
+// `expectedTotal` is what we calculated from the parcels before he
+// confirmed. Both are kept forever: a payout that came up short is
+// only provable if the number we expected survives alongside it.
+//
+// `trackingCodes` is what stops double-counting. A delivered parcel
+// counts toward "Ecotrack owes us" until its tracking code appears
+// on some payout here.
+model CourierPayout {
+  id            String   @id @default(cuid())
+  reference     String   @unique          // "#311959" from the slip
+  collectedAt   DateTime
+  parcelCount   Int?                      // what the slip claims
+  slipTotal     Int                       // DA actually received
+  expectedTotal Int                       // DA we calculated
+  accountId     String
+  account       FinanceAccount @relation(fields: [accountId], references: [id])
+  trackingCodes String[]                  // parcels this payout settles
+  note          String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  movements     MoneyMovement[]
+
+  @@index([collectedAt])
+}
+
+// ─── The cost rules ─────────────────────────────────────────
+// THE fix for the Command Center's settings living in one browser's
+// localStorage, where two laptops disagreed and a cleared cache lost
+// the lot. Both /finance and /dashboard read from here, so there is
+// exactly one set of cost numbers for the business.
+model FinanceSetting {
+  key       String   @id                 // "wrap.roubla", "print.perGame", "fx.eurDzd"
+  value     String                       // kept as text; the reader parses
+  label     String?                      // human label for the settings screen
+  unit      String?                      // "DA" | "DA/game" | "DA ×100"
+  note      String?  @db.Text            // where the number came from
+  sort      Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
 // ─── Enums ──────────────────────────────────────────────────
 enum OrderStatus {
   PENDING          // Just placed
@@ -386,6 +555,12 @@ enum OrderStatus {
   WRONG            // Wrong/fake number — junk, excluded from confirm rate
   DUPLICATE        // Duplicate of another order — junk
   // ── Delivery journey states (fed by Ecotrack tracking sync) ──
+  // SHIPPED means "we handed it over and the courier has not come yet".
+  // IN_TRANSIT means they have accepted it and it is moving through their
+  // network. Both used to be SHIPPED, which made a parcel created ten
+  // minutes ago look identical to one that had crossed the country — and
+  // hid two boxes the courier had never collected for ten days.
+  IN_TRANSIT       // Accepted by the carrier, moving (vers hub / vers wilaya)
   OUT_FOR_DELIVERY // Courier is out with it (home delivery)
   AT_STOPDESK      // Waiting at the stop-desk for pickup
   DELIVERY_FAILED  // Courier couldn't deliver — agent should call (rescue!)

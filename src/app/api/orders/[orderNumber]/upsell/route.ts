@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { verifyUpsellToken, UPSELL_PAIR } from "@/lib/upsell-token";
+import { moveStock } from "@/lib/stock";
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/orders/[orderNumber]/upsell
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     await db.orderItem.create({
       data: { orderId: order.id, productId: product.id, quantity: 1, unitPrice: product.price },
     });
-    await db.product.update({ where: { id: product.id }, data: { stock: { decrement: 1 } } });
+    await moveStock([{ slug: target, quantity: 1 }], "take");
 
     const bundleNote = `باك روبلة+دلالة: -${bundleDiscount} دج`;
     await db.order.update({
