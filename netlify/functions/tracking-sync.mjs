@@ -23,8 +23,19 @@ export default async () => {
 };
 
 export const config = {
-  // Every 15 minutes, offset off the hour to avoid top-of-hour crowds.
-  // Was hourly; tightened when the suivi board started feeding off this
-  // run, so a failed delivery surfaces within minutes rather than an hour.
-  schedule: "14,29,44,59 * * * *",
+  // Twice an hour, during Algerian working hours only.
+  //
+  // This ran every 15 minutes round the clock, which on 31 Aug 2026 was the
+  // main reason the database ran out of its monthly compute allowance and the
+  // whole store stopped taking orders for a morning. Neon puts an idle
+  // database to sleep after 5 minutes, so a wake every 15 means it never
+  // actually sleeps — roughly 8 hours a day billed for nothing.
+  //
+  // The freshness this was tightened for still matters, so it is kept where
+  // it earns its keep: 06:00-20:59 UTC = 07:00-21:59 Algiers. A failed
+  // delivery now surfaces within half an hour during the day instead of a
+  // quarter, and Ecotrack does not move parcels overnight anyway.
+  //
+  // 96 runs a day -> 30. The overnight gap is what lets the database rest.
+  schedule: "14,44 6-20 * * *",
 };
