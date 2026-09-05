@@ -12,9 +12,30 @@ export const fetchCache = "force-no-store";
 
 // Mirrors the legacy hardcoded coupons in /api/orders (kept in sync by hand —
 // they are stable, printed-material codes).
-const LEGACY: Record<string, { discount: number; slugs: string[] }> = {
+//
+// Anything in ACTIVE_COUPONS over there MUST be listed here too. The product
+// pages ask this endpoint whether an offer is still alive before they show the
+// discounted price; a code missing from this map answers "not valid", so the
+// page quietly falls back to full price while the checkout would happily have
+// honoured it. Expiry has to be mirrored for the same reason — otherwise the
+// page keeps promising a price the server has already stopped accepting.
+const LEGACY: Record<
+  string,
+  { discount: number; slugs: string[]; expiresAt?: Date }
+> = {
   INSTAGRAM: { discount: 900, slugs: ["eid-2026-bundle"] },
   HADIA400: { discount: 400, slugs: ["roubla"] },
+  // Event / stand codes behind the printed QR (see /api/orders).
+  SALON400: {
+    discount: 400,
+    slugs: ["roubla"],
+    expiresAt: new Date("2026-09-12T23:00:00Z"),
+  },
+  SALON450: {
+    discount: 450,
+    slugs: ["dlala"],
+    expiresAt: new Date("2026-09-12T23:00:00Z"),
+  },
 };
 
 export async function POST(request: NextRequest) {
@@ -31,6 +52,9 @@ export async function POST(request: NextRequest) {
 
   const legacy = LEGACY[code];
   if (legacy) {
+    if (legacy.expiresAt && new Date() > legacy.expiresAt) {
+      return NextResponse.json({ valid: false, reason: "expired" });
+    }
     const ok = slugs.length === 0 || slugs.some((s) => legacy.slugs.includes(s));
     return NextResponse.json(
       ok
