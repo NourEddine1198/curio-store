@@ -22,7 +22,13 @@ const BUNDLE_PAIR_OFF = 800; // must match the value in /api/orders
 // ...and so must this: a campaign code replaces the pair discount rather than
 // stacking with it, so the cross-sell prices the second game the same way the
 // checkout does. Keep in step with CAMPAIGN_PAIR_OFF in /api/orders.
-const CAMPAIGN_PAIR_OFF: Record<string, number> = { "DLALA-LAUNCH": 450 };
+const CAMPAIGN_PAIR_OFF: Record<string, number> = {
+  "DLALA-LAUNCH": 450,
+  // Event / stand codes — both doors must land the pair on 3,500.
+  // 4600 − 700 − 400 = 3500  ·  4600 − 650 − 450 = 3500
+  SALON400: 700,
+  SALON450: 650,
+};
 
 function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });

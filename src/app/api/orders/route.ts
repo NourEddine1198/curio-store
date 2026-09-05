@@ -73,6 +73,32 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
     applicableSlugs: ["roubla"],
     expiresAt: null,
   },
+  // ─── Event / stand codes (the printed QR) ───────────────
+  // We can play the games at events but not sell there, so a printed QR sends
+  // people to /salon and they order from home. One QR, two doors: the landing
+  // page picks the code for the game they tap, because a single code carries a
+  // single amount and the two games are discounted differently.
+  //
+  //   SALON400 → Roubla 2400 → 2000
+  //   SALON450 → Dlala  2200 → 1750
+  //   either one, both games → 3500 (see CAMPAIGN_PAIR_OFF below)
+  //
+  // UNLIKE the gift card, these DO expire: the offer is "because you were with
+  // us at the stand", and it stops being that a week later. The expiry is
+  // enforced here on the server, so it holds even if a printed poster is still
+  // on someone's fridge — no need to remember to switch anything off.
+  // Nounouti, 5 Sep 2026: one week. Set to the end of 12 Sep, Algeria time
+  // (UTC+1), so the last evening of the offer is a full evening.
+  SALON400: {
+    discountAmount: 400,
+    applicableSlugs: ["roubla"],
+    expiresAt: new Date("2026-09-12T23:00:00Z"),
+  },
+  SALON450: {
+    discountAmount: 450,
+    applicableSlugs: ["dlala"],
+    expiresAt: new Date("2026-09-12T23:00:00Z"),
+  },
 };
 
 // ─── Per-unit coupons ───────────────────────────────────
@@ -87,7 +113,10 @@ const ACTIVE_COUPONS: Record<string, CouponDef> = {
 // Leave a code OUT of this set unless it is advertised as a per-item price.
 // HADIA400 is a gift card and INSTAGRAM is a basket discount — both are right
 // to come off only once.
-const PER_UNIT_COUPONS = new Set<string>(["DLALA-LAUNCH"]);
+// The event poster prints «روبلة 2,000 دج» and «دلالة 1,750 دج» — those are
+// claims about the price of ONE box, exactly like the Dlala launch. Someone who
+// scans the stand's QR and buys two copies must get both at the printed price.
+const PER_UNIT_COUPONS = new Set<string>(["DLALA-LAUNCH", "SALON400", "SALON450"]);
 
 // ─── Campaign pair pricing ──────────────────────────────
 // A code listed here REPLACES the normal 800 DA pair discount with its own,
@@ -101,7 +130,21 @@ const PER_UNIT_COUPONS = new Set<string>(["DLALA-LAUNCH"]);
 //
 // Only codes named here behave this way. An ordinary pair with no coupon keeps
 // the full 800 off and stays at 3,800.
-const CAMPAIGN_PAIR_OFF: Record<string, number> = { "DLALA-LAUNCH": 450 };
+//
+// The event codes land on ONE pair price from either direction. Nounouti set
+// the stand's pair at 3,500 (the public pair is 3,800, so it is visibly better
+// — at 3,750 it would have been worth 50 DA and not worth printing).
+// Both doors must arrive at the same number, so each code carries its own rate:
+//
+//   SALON400 (came in on Roubla): 4600 − 700 − 400 = 3500
+//   SALON450 (came in on Dlala):  4600 − 650 − 450 = 3500
+//
+// FIXED AMOUNTS — re-derive all four if either game's price moves.
+const CAMPAIGN_PAIR_OFF: Record<string, number> = {
+  "DLALA-LAUNCH": 450,
+  SALON400: 700,
+  SALON450: 650,
+};
 
 async function validateCoupon(
   code: string,
