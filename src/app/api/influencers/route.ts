@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { computeStats, fetchOrdersForCodes } from "@/lib/influencer-stats";
+import {
+  DEFAULT_LANDING,
+  isAllowedLanding,
+  normalizeSlug,
+  slugProblem,
+} from "@/lib/influencer-links";
 
 // Admin-only influencer management: list with live stats, create new.
 // Same auth as the Command Center: x-admin-key header vs ADMIN_KEY env.
@@ -33,6 +39,21 @@ function toNonNegativeInt(value: unknown, fallback = 0): number | null {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.floor(n);
+}
+
+// A short link and a coupon code share one namespace: /i/<slug> answers to
+// either, so "sara" as one influencer's link name and SARA as another's code
+// would quietly send her followers to somebody else's orders. Check both
+// directions, every time.
+async function linkNameTaken(slug: string, exceptId?: string) {
+  const clash = await db.influencer.findFirst({
+    where: {
+      OR: [{ linkSlug: slug }, { couponCode: slug.toUpperCase() }],
+      ...(exceptId ? { NOT: { id: exceptId } } : {}),
+    },
+    select: { id: true },
+  });
+  return !!clash;
 }
 
 export async function GET(request: NextRequest) {
@@ -102,9 +123,25 @@ export async function POST(request: NextRequest) {
     ? body.applicableSlugs.filter((s: unknown) => typeof s === "string" && s)
     : [];
 
+  const landingPath = isAllowedLanding(body.landingPath)
+    ? body.landingPath
+    : DEFAULT_LANDING;
+
+  const linkSlug = normalizeSlug(body.linkSlug);
+  if (linkSlug) {
+    const problem = slugProblem(linkSlug);
+    if (problem) return badRequest(problem);
+  }
+
   // Read-then-create (Neon HTTP: no transactions) — friendly duplicate error.
   const existing = await db.influencer.findUnique({ where: { couponCode } });
   if (existing) return badRequest("هذا الكود مستعمل من قبل مؤثر آخر");
+  if (await linkNameTaken(couponCode.toLowerCase())) {
+    return badRequest("هذا الكود مستعمل كرابط قصير عند مؤثر آخر");
+  }
+  if (linkSlug && (await linkNameTaken(linkSlug))) {
+    return badRequest("هذا الرابط القصير مستعمل من قبل");
+  }
 
   const influencer = await db.influencer.create({
     data: {
@@ -121,6 +158,8 @@ export async function POST(request: NextRequest) {
       commissionBasis,
       countTrigger,
       fixedFee,
+      landingPath,
+      linkSlug: linkSlug || null,
       notes: typeof body.notes === "string" ? body.notes.trim() || null : null,
     },
   });

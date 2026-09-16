@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  LANDING_OPTIONS,
+  landingUrl,
+  sellingLink,
+} from "@/lib/influencer-links";
 
 // ─── The Influencer Window ──────────────────────────────────
 // One screen: every influencer, their deal, their orders funnel,
@@ -51,6 +56,8 @@ interface Influencer {
   commissionBasis: string;
   countTrigger: string;
   fixedFee: number;
+  linkSlug: string | null;
+  landingPath: string;
   shareToken: string;
   notes: string | null;
   createdAt: string;
@@ -100,6 +107,8 @@ const EMPTY_FORM = {
   commissionBasis: "ORDER",
   countTrigger: "CONFIRMED",
   fixedFee: "0",
+  linkSlug: "",
+  landingPath: "/roubla/",
   notes: "",
 };
 type FormState = typeof EMPTY_FORM;
@@ -224,6 +233,8 @@ export default function InfluencersPage() {
       commissionBasis: inf.commissionBasis,
       countTrigger: inf.countTrigger,
       fixedFee: String(inf.fixedFee),
+      linkSlug: inf.linkSlug ?? "",
+      landingPath: inf.landingPath || "/roubla/",
       notes: inf.notes ?? "",
     });
     setFormError("");
@@ -246,6 +257,8 @@ export default function InfluencersPage() {
         commissionBasis: form.commissionBasis,
         countTrigger: form.countTrigger,
         fixedFee: form.fixedFee,
+        linkSlug: form.linkSlug,
+        landingPath: form.landingPath,
         notes: form.notes,
       };
       if (editingId) {
@@ -324,10 +337,23 @@ export default function InfluencersPage() {
     }
   }
 
-  function copyLink(inf: Influencer) {
-    const url = window.location.origin + "/i/" + inf.shareToken;
+  // Her two links. Mixing them up is the easy mistake, so they are named for
+  // what they DO, never just "link":
+  //   selling link  = what she posts (carries her code + the source tags)
+  //   private page  = where she watches her own sales (shows no customer data)
+  function sellingUrl(inf: Influencer): string {
+    return sellingLink(inf.linkSlug || inf.couponCode);
+  }
+  function longUrl(inf: Influencer): string {
+    return landingUrl(inf.landingPath, inf.couponCode);
+  }
+  function privateUrl(inf: Influencer): string {
+    return window.location.origin + "/i/" + inf.shareToken;
+  }
+
+  function copy(url: string, what: string) {
     navigator.clipboard.writeText(url).then(
-      () => ping("Private link copied ✓ — send it to " + inf.name),
+      () => ping(what + " copied ✓"),
       () => ping(url)
     );
   }
@@ -482,6 +508,11 @@ export default function InfluencersPage() {
                       {r.customerDiscount > 0 && (
                         <span className="iw-sub">−{fmt(r.customerDiscount)} DA for customer</span>
                       )}
+                      <span className="iw-sub">
+                        /i/{(r.linkSlug || r.couponCode).toLowerCase()} →{" "}
+                        {LANDING_OPTIONS.find((o) => o.path === r.landingPath)?.label ??
+                          r.landingPath}
+                      </span>
                       {r.maxUses > 0 && (
                         <span
                           className={
@@ -534,8 +565,11 @@ export default function InfluencersPage() {
                       <button className="iw-btn iw-sm" onClick={() => openDetail(r.id)}>
                         Details
                       </button>
-                      <button className="iw-btn iw-sm" onClick={() => copyLink(r)}>
-                        Their link
+                      <button
+                        className="iw-btn iw-sm"
+                        onClick={() => copy(sellingUrl(r), "Selling link")}
+                      >
+                        Copy link
                       </button>
                     </td>
                   </tr>
@@ -587,6 +621,23 @@ export default function InfluencersPage() {
                 Coupon code* <span className="iw-hint">what followers type — e.g. SARA200</span>
                 <input className="iw-input iw-upper" value={form.couponCode}
                   onChange={(e) => setForm({ ...form, couponCode: e.target.value.toUpperCase() })} />
+              </label>
+              <label>
+                Her link lands on <span className="iw-hint">where curiodz.com/i/… drops her followers</span>
+                <select className="iw-input" value={form.landingPath}
+                  onChange={(e) => setForm({ ...form, landingPath: e.target.value })}>
+                  {LANDING_OPTIONS.map((o) => (
+                    <option key={o.path} value={o.path}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Short link name <span className="iw-hint">empty = her code is used</span>
+                <input className="iw-input" value={form.linkSlug} placeholder={form.couponCode.toLowerCase() || "sara"}
+                  onChange={(e) => setForm({ ...form, linkSlug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })} />
+                <span className="iw-hint">
+                  curiodz.com/i/{form.linkSlug || form.couponCode.toLowerCase() || "…"}
+                </span>
               </label>
               <label>
                 Customer gets (DA off) <span className="iw-hint">what the code gives the buyer</span>
@@ -660,8 +711,62 @@ export default function InfluencersPage() {
                 <button className="iw-btn iw-sm" onClick={() => toggleActive(detail)}>
                   {detail.active ? "Pause code" : "Activate code"}
                 </button>
-                <button className="iw-btn iw-sm" onClick={() => copyLink(detail)}>Copy their link</button>
+                <button
+                  className="iw-btn iw-sm"
+                  onClick={() => copy(sellingUrl(detail), "Selling link")}
+                >
+                  Copy selling link
+                </button>
                 <button className="iw-btn iw-sm" onClick={() => setDetailId(null)}>Close</button>
+              </div>
+            </div>
+
+            <div className="iw-links">
+              <div className="iw-linkrow">
+                <div>
+                  <b>Her selling link</b>
+                  <span className="iw-sub">
+                    this is what she posts — her code is applied automatically
+                  </span>
+                  <code className="iw-url">{sellingUrl(detail)}</code>
+                </div>
+                <button
+                  className="iw-btn iw-primary iw-sm"
+                  onClick={() => copy(sellingUrl(detail), "Selling link")}
+                >
+                  Copy
+                </button>
+              </div>
+              <div className="iw-linkrow">
+                <div>
+                  <b>Long version</b>
+                  <span className="iw-sub">
+                    same destination without the short link — use it if anything
+                    ever blocks the short one
+                  </span>
+                  <code className="iw-url">{longUrl(detail)}</code>
+                </div>
+                <button
+                  className="iw-btn iw-sm"
+                  onClick={() => copy(longUrl(detail), "Long link")}
+                >
+                  Copy
+                </button>
+              </div>
+              <div className="iw-linkrow">
+                <div>
+                  <b>Her private page</b>
+                  <span className="iw-sub">
+                    where SHE watches her own sales — no customer details on it
+                  </span>
+                  <code className="iw-url">{privateUrl(detail)}</code>
+                </div>
+                <button
+                  className="iw-btn iw-sm"
+                  onClick={() => copy(privateUrl(detail), "Private page link")}
+                >
+                  Copy
+                </button>
               </div>
             </div>
 
@@ -796,6 +901,11 @@ function Style() {
       .iw-modal label{display:block;font-weight:700;font-size:12.5px;margin-bottom:2px;}
       .iw-hint{font-weight:400;color:#6b6b6b;}
       .iw-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}
+      .iw-links{border:2px solid #141414;border-radius:12px;padding:4px 12px;margin-bottom:14px;background:#fffdf6;}
+      .iw-linkrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px dashed #e3dcc8;}
+      .iw-linkrow:last-child{border-bottom:none;}
+      .iw-linkrow b{font-size:12.5px;display:block;}
+      .iw-url{display:block;font-size:12px;word-break:break-all;color:#141414;background:#f2ecdc;border-radius:6px;padding:3px 7px;margin-top:3px;}
       .iw-detail-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px;}
       .iw-detail-actions{display:flex;gap:6px;flex-wrap:wrap;}
       .iw-cols{display:grid;grid-template-columns:320px 1fr;gap:20px;}

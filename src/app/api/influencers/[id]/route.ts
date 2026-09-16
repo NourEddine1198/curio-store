@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import {
+  isAllowedLanding,
+  normalizeSlug,
+  slugProblem,
+} from "@/lib/influencer-links";
 
 // Edit / deactivate / delete one influencer. Admin-key gated.
 
@@ -18,6 +23,19 @@ function authorized(request: NextRequest): boolean {
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+// Same namespace guard as the create route: /i/<name> answers to a short link
+// name OR a coupon code, so neither may collide with the other's.
+async function linkNameTaken(slug: string, exceptId: string) {
+  const clash = await db.influencer.findFirst({
+    where: {
+      OR: [{ linkSlug: slug }, { couponCode: slug.toUpperCase() }],
+      NOT: { id: exceptId },
+    },
+    select: { id: true },
+  });
+  return !!clash;
 }
 
 function toNonNegativeInt(value: unknown): number | null {
@@ -84,6 +102,30 @@ export async function PATCH(
       : [];
   }
 
+  if (body.landingPath !== undefined) {
+    if (!isAllowedLanding(body.landingPath)) {
+      return badRequest("وين يهبط الرابط: اختيار غير صحيح");
+    }
+    data.landingPath = body.landingPath;
+  }
+
+  // The short link name can change freely — unlike the code, it carries no
+  // order history. The only cost is that links she already posted stop
+  // working, which is her call to make with us, not a data problem.
+  if (body.linkSlug !== undefined) {
+    const slug = normalizeSlug(body.linkSlug);
+    if (!slug) {
+      data.linkSlug = null;
+    } else if (slug !== (influencer.linkSlug ?? "")) {
+      const problem = slugProblem(slug);
+      if (problem) return badRequest(problem);
+      if (await linkNameTaken(slug, id)) {
+        return badRequest("هذا الرابط القصير مستعمل من قبل");
+      }
+      data.linkSlug = slug;
+    }
+  }
+
   // Changing the code is only allowed while no orders carry it —
   // otherwise history (and money owed) would silently detach.
   if (body.couponCode !== undefined) {
@@ -105,6 +147,9 @@ export async function PATCH(
         where: { couponCode: newCode },
       });
       if (taken) return badRequest("هذا الكود مستعمل من قبل مؤثر آخر");
+      if (await linkNameTaken(newCode.toLowerCase(), id)) {
+        return badRequest("هذا الكود مستعمل كرابط قصير عند مؤثر آخر");
+      }
       data.couponCode = newCode;
     }
   }

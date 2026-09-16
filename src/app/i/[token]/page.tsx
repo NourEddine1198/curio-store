@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { computeStats, fetchOrdersForCodes } from "@/lib/influencer-stats";
+import { sellingLink } from "@/lib/influencer-links";
 
 // ─── The influencer's own results page ──────────────────────
 // Opened via their secret link /i/<shareToken>. Read-only, live,
@@ -71,6 +72,9 @@ export default async function InfluencerResultsPage({
 
   const recent = orders.slice(0, 30);
 
+  // What she posts: the short door link, which carries her code by itself.
+  const myLink = sellingLink(influencer.linkSlug || influencer.couponCode);
+
   return (
     <div className="ip" dir="rtl">
       <style dangerouslySetInnerHTML={{ __html: `
@@ -93,6 +97,11 @@ export default async function InfluencerResultsPage({
         .ip-row:last-child{border-bottom:none;}
         .ip-row b{font-size:15px;}
         .ip-balance{color:#E5443A;}
+        .ip-linkbox{margin-top:14px;}
+        .ip-linklabel{display:block;font-size:12.5px;color:#6b6b6b;margin-bottom:4px;}
+        .ip-link{display:inline-block;direction:ltr;background:#fff;border:2.5px solid #141414;border-radius:10px;padding:9px 16px;font:inherit;font-size:15px;font-weight:800;color:#141414;cursor:pointer;max-width:100%;word-break:break-all;}
+        .ip-link:active{transform:translateY(1px);}
+        .ip-linkhint{display:block;font-size:12.5px;color:#6b6b6b;margin-top:6px;}
         .ip-deal{font-size:12.5px;color:#6b6b6b;margin-top:10px;}
         .ip-orders{background:#fff;border:3px solid #141414;border-radius:14px;box-shadow:5px 5px 0 #141414;padding:16px;}
         .ip-orders h2{margin:0 0 10px;font-size:16px;}
@@ -115,6 +124,18 @@ export default async function InfluencerResultsPage({
         <div className="ip-hero">
           <h1>صحّا {influencer.name}!</h1>
           <div className="ip-code">{influencer.couponCode}</div>
+
+          {/* Her link, on the one page she always has open. She will lose the
+              message we sent it in; she will not lose this page. */}
+          <div className="ip-linkbox">
+            <span className="ip-linklabel">الرابط ديالك</span>
+            <button type="button" id="ip-copy" className="ip-link" data-link={myLink}>
+              {myLink}
+            </button>
+            <span className="ip-linkhint" id="ip-copyhint">
+              حطّو في البيو ولا في الستوري — كل واحد يشري منّو يتحسب ليك
+            </span>
+          </div>
           {influencer.customerDiscount > 0 ? (
             <p>
               المتبعين ديالك ياخذو −{fmt(influencer.customerDiscount)} دج بالكود
@@ -193,6 +214,22 @@ export default async function InfluencerResultsPage({
           الأرقام حية مباشرة من نظام كيوريو — كل ما تشارك الكود، ترتفع.
         </p>
       </div>
+
+      {/* Tap-to-copy. Plain script, not a client component: this page is one
+          server-rendered read and there is no reason to ship React state for a
+          button. dangerouslySetInnerHTML because React escapes quotes inside a
+          normal <script> body, which breaks it (same trap as <style> here). */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `(function(){var b=document.getElementById('ip-copy');
+if(!b)return;var h=document.getElementById('ip-copyhint');var t=h?h.textContent:'';
+b.addEventListener('click',function(){var v=b.getAttribute('data-link')||'';
+function done(){if(!h)return;h.textContent='تكوبيا ✓';setTimeout(function(){h.textContent=t;},1800);}
+if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(v).then(done,function(){});return;}
+var i=document.createElement('input');i.value=v;document.body.appendChild(i);i.select();
+try{document.execCommand('copy');done();}catch(e){}document.body.removeChild(i);});})();`,
+        }}
+      />
     </div>
   );
 }
